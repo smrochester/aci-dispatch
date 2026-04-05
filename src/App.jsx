@@ -14,19 +14,7 @@ const ACIDispatchApp = () => {
     claudeApiKey: localStorage.getItem('claude_key') || '',
   });
 
-  const [lovableData] = useState({
-    employees: [],
-    availability: [],
-    jobs: [],
-    assignments: [],
-    whatsappSessions: [],
-    properties: [],
-    clients: [],
-    timeEntries: [],
-    qaFindings: [],
-    bookings: [],
-    lastUpdated: null,
-  });
+
 
   const [liveData, setLiveData] = useState({
     weeklyJobs: [],
