@@ -328,8 +328,8 @@ TASK: Generate optimal weekly dispatch schedule with simple JSON output showing 
     setError(null);
     setDebugLog([]);
     
-    const lovableSuccess = await syncLovableData();
-    const hcpSuccess = await syncHouseCallPro();
+    await syncLovableData();
+    await syncHouseCallPro();
     
     // Wait a moment for state to update
     setTimeout(() => {
