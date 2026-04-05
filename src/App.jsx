@@ -3,6 +3,7 @@ import React, { useState, useEffect, useRef } from 'react';
 const ACIDispatchApp = () => {
   const [activeTab, setActiveTab] = useState('weekly');
   const [loading, setLoading] = useState(false);
+  const [syncProgress, setSyncProgress] = useState('');
   const [dispatchResult, setDispatchResult] = useState(null);
   const [error, setError] = useState(null);
   const [status, setStatus] = useState('');
@@ -11,6 +12,8 @@ const ACIDispatchApp = () => {
   const [settings, setSettings] = useState({
     housecallProApiKey: localStorage.getItem('hcp_key') || '',
     claudeApiKey: localStorage.getItem('claude_key') || '',
+    lovableApiKey: localStorage.getItem('lovable_key') || '',
+    lovableWorkspaceId: localStorage.getItem('lovable_workspace') || '',
     historicalCsvUploaded: !!localStorage.getItem('csv_uploaded'),
     lastSync: localStorage.getItem('last_sync'),
   });
@@ -18,6 +21,8 @@ const ACIDispatchApp = () => {
   const [liveData, setLiveData] = useState({
     weeklyJobs: [],
     availableCrew: [],
+    teamAvailability: [],
+    jobInteractions: [],
     properties: [],
     historicalContext: null,
     lastUpdated: null,
@@ -25,7 +30,7 @@ const ACIDispatchApp = () => {
 
   const [weeklySchedule, setWeeklySchedule] = useState({
     week_start_date: getNextWednesday(),
-    crew_preferences: 'Standard rotation',
+    crew_preferences: 'Ira leads North. Leslie leads South. Porshua dedicated Beach Island. Tiara & McKayla always together.',
     vacation_blocks: '',
   });
 
@@ -56,17 +61,82 @@ const ACIDispatchApp = () => {
     setSavedSchedules(Object.keys(schedules).sort().reverse());
   };
 
+  const syncLovable = async () => {
+    if (!settings.lovableApiKey.trim() || !settings.lovableWorkspaceId.trim()) {
+      setSyncProgress('Lovable API key/workspace not configured (optional)');
+      return { teamAvailability: [], jobInteractions: [] };
+    }
+
+    setSyncProgress('📱 Syncing team availability from Lovable...');
+
+    try {
+      // Fetch team members and their availability
+      const teamResponse = await fetch(
+        `https://api.lovable.dev/v1/workspaces/${settings.lovableWorkspaceId}/team`,
+        {
+          headers: {
+            'Authorization': `Bearer ${settings.lovableApiKey}`,
+            'Content-Type': 'application/json',
+          }
+        }
+      );
+
+      if (!teamResponse.ok) {
+        throw new Error(`Lovable API error: ${teamResponse.status}`);
+      }
+
+      const teamData = await teamResponse.json();
+      setSyncProgress('📊 Fetching job interaction data from Lovable...');
+
+      // Fetch job interactions
+      const interactionsResponse = await fetch(
+        `https://api.lovable.dev/v1/workspaces/${settings.lovableWorkspaceId}/interactions`,
+        {
+          headers: {
+            'Authorization': `Bearer ${settings.lovableApiKey}`,
+            'Content-Type': 'application/json',
+          }
+        }
+      );
+
+      const interactionsData = await interactionsResponse.json();
+
+      const teamAvailability = (teamData.members || []).map(member => ({
+        id: member.id,
+        name: member.name,
+        availability_status: member.availability_status,
+        hours_available: member.hours_available,
+        location: member.location,
+        specialties: member.specialties || [],
+      }));
+
+      const jobInteractions = (interactionsData.interactions || []).map(interaction => ({
+        id: interaction.id,
+        team_member_id: interaction.team_member_id,
+        job_type: interaction.job_type,
+        interaction_count: interaction.count,
+        success_rate: interaction.success_rate,
+        average_duration: interaction.average_duration,
+      }));
+
+      setSyncProgress('✓ Lovable data synced');
+      return { teamAvailability, jobInteractions };
+    } catch (err) {
+      setSyncProgress(`⚠️ Lovable sync skipped: ${err.message}`);
+      return { teamAvailability: [], jobInteractions: [] };
+    }
+  };
+
   const syncHouseCallPro = async () => {
     if (!settings.housecallProApiKey.trim()) {
       setError('Please enter HouseCall Pro API key');
-      return;
+      return false;
     }
 
-    setLoading(true);
-    setStatus('Syncing with HouseCall Pro...');
-    setError(null);
+    setSyncProgress('🔄 Connecting to HouseCall Pro...');
 
     try {
+      setSyncProgress('📥 Fetching scheduled jobs...');
       const startDate = new Date(weeklySchedule.week_start_date);
       const endDate = new Date(startDate);
       endDate.setDate(endDate.getDate() + 6);
@@ -86,7 +156,9 @@ const ACIDispatchApp = () => {
       }
 
       const jobsData = await jobsResponse.json();
+      setSyncProgress(`✓ Found ${jobsData.data?.length || 0} jobs. Fetching crew...`);
 
+      setSyncProgress('👥 Fetching team members...');
       const crewResponse = await fetch(
         `https://api.housecallpro.com/v2/team_members?limit=50`,
         {
@@ -98,7 +170,9 @@ const ACIDispatchApp = () => {
       );
 
       const crewData = await crewResponse.json();
+      setSyncProgress(`✓ Found ${crewData.data?.length || 0} crew. Fetching properties...`);
 
+      setSyncProgress('🏠 Fetching customer properties...');
       const customersResponse = await fetch(
         `https://api.housecallpro.com/v2/customers?limit=500`,
         {
@@ -110,6 +184,7 @@ const ACIDispatchApp = () => {
       );
 
       const customersData = await customersResponse.json();
+      setSyncProgress(`✓ Found ${customersData.data?.length || 0} properties. Processing...`);
 
       const transformedJobs = (jobsData.data || [])
         .filter(job => {
@@ -121,11 +196,14 @@ const ACIDispatchApp = () => {
           property: job.customer?.business_name || job.customer?.name || 'Unknown',
           duration_estimate: job.estimate_minutes || 120,
           type: job.location?.name?.toLowerCase().includes('vacation') ? 'vr_turnover' : 'residential',
+          scheduled_start: job.scheduled_start_time,
+          priority: job.is_emergency ? 'high' : 'medium',
         }));
 
       const transformedCrew = (crewData.data || []).map(member => ({
         id: member.id,
         name: member.name,
+        status: member.status,
       }));
 
       const transformedCustomers = (customersData.data || []).map(customer => ({
@@ -145,11 +223,12 @@ const ACIDispatchApp = () => {
       setSettings(newSettings);
       localStorage.setItem('last_sync', newSettings.lastSync);
 
-      setStatus(`✓ Synced: ${transformedJobs.length} jobs, ${transformedCrew.length} crew`);
+      setSyncProgress(`✓ HouseCall Pro synced: ${transformedJobs.length} jobs, ${transformedCrew.length} crew`);
+      return true;
     } catch (err) {
       setError(`HouseCall Pro sync failed: ${err.message}`);
-    } finally {
-      setLoading(false);
+      setSyncProgress('❌ HouseCall Pro sync failed');
+      return false;
     }
   };
 
@@ -158,7 +237,7 @@ const ACIDispatchApp = () => {
     if (!file) return;
 
     setLoading(true);
-    setStatus('Processing historical CSV from HouseCall Pro...');
+    setSyncProgress('📂 Processing historical CSV from HouseCall Pro...');
 
     const reader = new FileReader();
     reader.onload = async (e) => {
@@ -170,18 +249,14 @@ const ACIDispatchApp = () => {
           throw new Error('CSV file is empty');
         }
 
-        // HouseCall Pro export has headers in first row
-        // Skip header row and parse data
+        setSyncProgress(`📊 Parsing ${lines.length} rows...`);
+
         const historicalJobs = [];
         
         for (let i = 1; i < lines.length; i++) {
           try {
-            // Parse CSV line carefully (handle quoted fields)
             const line = lines[i];
             if (!line.trim()) continue;
-            
-            // Extract key fields from HouseCall Pro format:
-            // Job #,Job status,Customer name,Address,Job scheduled end date,Job completed date,Assigned employees,Job type,Job amount,Due amount,Invoice last sent date,Payment status,Paid amount,Job duration,Total duration,Total time on job by employee,Total labor hours
             
             const parts = line.split(',');
             if (parts.length < 14) continue;
@@ -192,26 +267,25 @@ const ACIDispatchApp = () => {
             const jobDuration = parseFloat(parts[13]?.replace(/"/g, '').trim()) || 0;
             const assignedEmployees = parts[6]?.replace(/"/g, '').trim() || 'Unknown';
             
-            // Only include completed jobs
             if (status !== 'Completed' || !jobDuration) continue;
             
             historicalJobs.push({
               job_id: jobId,
               customer: customerName,
               assigned_employees: assignedEmployees,
-              actual_duration: Math.round(jobDuration * 60), // Convert to minutes
+              actual_duration: Math.round(jobDuration * 60),
             });
           } catch (lineError) {
-            // Skip problematic lines
             continue;
           }
         }
 
         if (historicalJobs.length === 0) {
-          throw new Error('No completed jobs found in CSV. Make sure you exported from HouseCall Pro with "Completed" status.');
+          throw new Error('No completed jobs found in CSV.');
         }
 
-        // Calculate average duration by employee
+        setSyncProgress(`✓ Analyzed ${historicalJobs.length} completed jobs. Calculating crew averages...`);
+
         const crewAverages = {};
         historicalJobs.forEach(job => {
           const crews = job.assigned_employees.split(',').map(c => c.trim());
@@ -244,9 +318,10 @@ const ACIDispatchApp = () => {
         const newSettings = { ...settings, historicalCsvUploaded: true };
         setSettings(newSettings);
 
-        setStatus(`✓ Processed ${historicalJobs.length} completed jobs from HouseCall Pro`);
+        setSyncProgress(`✓ CSV processed: ${historicalJobs.length} jobs analyzed`);
       } catch (err) {
-        setError(`CSV processing failed: ${err.message}. Make sure this is a HouseCall Pro job export.`);
+        setError(`CSV processing failed: ${err.message}`);
+        setSyncProgress('❌ CSV processing failed');
       } finally {
         setLoading(false);
       }
@@ -267,7 +342,7 @@ const ACIDispatchApp = () => {
     }
 
     setLoading(true);
-    setStatus('Claude is optimizing your weekly schedule...');
+    setSyncProgress('🤖 Claude is optimizing your weekly schedule...');
     setError(null);
 
     const dispatchPrompt = `You are an expert dispatcher for American Cleaning Innovations (ACI).
@@ -277,16 +352,30 @@ WEEK: ${weeklySchedule.week_start_date} (Wednesday) through ${new Date(new Date(
 JOBS (${liveData.weeklyJobs.length} total):
 ${JSON.stringify(liveData.weeklyJobs.slice(0, 50), null, 2)}
 
-CREW:
+CREW FROM HOUSECALL PRO:
 ${JSON.stringify(liveData.availableCrew, null, 2)}
 
-HISTORICAL DATA FROM HOUSECALL PRO:
-${liveData.historicalContext ? JSON.stringify(liveData.historicalContext, null, 2) : 'No historical data loaded'}
+TEAM AVAILABILITY FROM LOVABLE:
+${liveData.teamAvailability.length > 0 ? JSON.stringify(liveData.teamAvailability, null, 2) : 'No Lovable data available'}
+
+JOB INTERACTIONS FROM LOVABLE:
+${liveData.jobInteractions.length > 0 ? JSON.stringify(liveData.jobInteractions, null, 2) : 'No Lovable interaction data available'}
+
+HISTORICAL DATA:
+${liveData.historicalContext ? JSON.stringify(liveData.historicalContext, null, 2) : 'No historical data'}
 
 CREW PREFERENCES:
 ${weeklySchedule.crew_preferences}
 
-TASK: Generate weekly dispatch schedule with crew assignments, times, and confidence levels.
+VACATION/UNAVAILABLE:
+${weeklySchedule.vacation_blocks || 'None'}
+
+TASK: Generate optimal weekly dispatch schedule considering:
+1. Same-day turnovers are highest priority
+2. Crew availability from both HouseCall Pro and Lovable
+3. Historical performance patterns
+4. Job interaction success rates
+5. Team preferences and constraints
 
 Output JSON:
 {
@@ -296,16 +385,19 @@ Output JSON:
       "jobs": [
         {
           "job_id": "...",
+          "property": "...",
           "assigned_crew": "...",
           "start_time": "HH:MM",
           "end_time": "HH:MM",
-          "confidence": 90
+          "confidence": 90,
+          "rationale": "..."
         }
       ]
     }
   ],
   "crew_utilization": {},
-  "summary": "..."
+  "risks": [],
+  "recommendations": []
 }`;
 
     try {
@@ -327,6 +419,7 @@ Output JSON:
         throw new Error(errorData.error?.message || 'Claude API error');
       }
 
+      setSyncProgress('📝 Parsing Claude response...');
       const data = await response.json();
       const responseText = data.content[0].text;
       const jsonMatch = responseText.match(/\{[\s\S]*\}/);
@@ -336,11 +429,33 @@ Output JSON:
       await savePastSchedule(weeklySchedule.week_start_date, result);
       await loadPastSchedules();
 
+      setSyncProgress('✓ Schedule generated and saved');
       setStatus('✓ Weekly schedule optimized and saved.');
     } catch (err) {
       setError(`Claude dispatch failed: ${err.message}`);
+      setSyncProgress('❌ Schedule generation failed');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleGenerateClick = async () => {
+    setSyncProgress('');
+    setError(null);
+    
+    // Sync Lovable first (non-blocking)
+    const lovableData = await syncLovable();
+    setLiveData(prev => ({
+      ...prev,
+      teamAvailability: lovableData.teamAvailability,
+      jobInteractions: lovableData.jobInteractions,
+    }));
+
+    // Then sync HouseCall Pro
+    const hcpSuccess = await syncHouseCallPro();
+    if (hcpSuccess) {
+      // Finally generate dispatch
+      await generateWeeklyDispatch();
     }
   };
 
@@ -351,12 +466,19 @@ Output JSON:
           <h1 style={{ fontSize: '2rem', fontWeight: 'bold', color: '#1f2937', margin: '0 0 0.5rem 0' }}>
             ⚡ ACI Weekly AI Dispatch
           </h1>
-          <p style={{ color: '#6b7280', margin: 0 }}>Plan your entire week on Sunday. Optimize automatically.</p>
+          <p style={{ color: '#6b7280', margin: 0 }}>Integrated with HouseCall Pro & Lovable. Optimized by Claude AI.</p>
         </div>
 
-        {status && (
+        {syncProgress && (
           <div style={{ background: '#dbeafe', border: '1px solid #93c5fd', borderRadius: '8px', padding: '1rem', marginBottom: '1.5rem', color: '#1e40af' }}>
-            {status}
+            <div style={{ fontSize: '0.875rem', fontWeight: '500', marginBottom: '0.5rem' }}>🔄 Syncing Status:</div>
+            <div style={{ fontSize: '1rem', fontFamily: 'monospace' }}>{syncProgress}</div>
+          </div>
+        )}
+
+        {status && (
+          <div style={{ background: '#f0fdf4', border: '1px solid #86efac', borderRadius: '8px', padding: '1rem', marginBottom: '1.5rem', color: '#15803d' }}>
+            ✓ {status}
           </div>
         )}
 
@@ -407,18 +529,27 @@ Output JSON:
                 </div>
 
                 <div style={{ marginBottom: '1rem' }}>
-                  <label style={{ display: 'block', fontWeight: '600', marginBottom: '0.5rem' }}>Crew Preferences</label>
+                  <label style={{ display: 'block', fontWeight: '600', marginBottom: '0.5rem' }}>Crew Preferences & Constraints</label>
                   <textarea
                     value={weeklySchedule.crew_preferences}
                     onChange={(e) => setWeeklySchedule({ ...weeklySchedule, crew_preferences: e.target.value })}
+                    style={{ width: '100%', height: '100px', padding: '0.5rem', border: '1px solid #d1d5db', borderRadius: '4px', fontFamily: 'sans-serif' }}
+                  />
+                  <p style={{ fontSize: '0.875rem', color: '#6b7280', marginTop: '0.25rem' }}>Include team roles, specialties, and constraints</p>
+                </div>
+
+                <div style={{ marginBottom: '1rem' }}>
+                  <label style={{ display: 'block', fontWeight: '600', marginBottom: '0.5rem' }}>Vacation/Unavailable Days</label>
+                  <textarea
+                    value={weeklySchedule.vacation_blocks}
+                    onChange={(e) => setWeeklySchedule({ ...weeklySchedule, vacation_blocks: e.target.value })}
                     style={{ width: '100%', height: '80px', padding: '0.5rem', border: '1px solid #d1d5db', borderRadius: '4px', fontFamily: 'sans-serif' }}
+                    placeholder="e.g., Ira off Wed-Thu, Tiara unavailable Monday..."
                   />
                 </div>
 
                 <button
-                  onClick={() => {
-                    syncHouseCallPro().then(() => generateWeeklyDispatch());
-                  }}
+                  onClick={handleGenerateClick}
                   disabled={loading || !settings.housecallProApiKey || !settings.claudeApiKey}
                   style={{
                     width: '100%',
@@ -429,17 +560,34 @@ Output JSON:
                     borderRadius: '4px',
                     fontWeight: '600',
                     cursor: 'pointer',
+                    fontSize: '1rem',
                   }}
                 >
-                  {loading ? 'Generating...' : 'Generate Schedule'}
+                  {loading ? '🔄 Syncing & Generating...' : '⚡ Generate Schedule'}
                 </button>
 
                 {dispatchResult && (
                   <div style={{ marginTop: '2rem', background: '#f0fdf4', border: '1px solid #86efac', borderRadius: '4px', padding: '1rem' }}>
                     <h3 style={{ color: '#166534', marginBottom: '1rem' }}>✓ Schedule Generated</h3>
-                    <pre style={{ background: 'white', padding: '1rem', borderRadius: '4px', overflow: 'auto', maxHeight: '300px', fontSize: '0.875rem' }}>
-                      {JSON.stringify(dispatchResult, null, 2)}
-                    </pre>
+                    {dispatchResult.crew_utilization && Object.keys(dispatchResult.crew_utilization).length > 0 && (
+                      <div style={{ background: 'white', padding: '1rem', borderRadius: '4px', marginBottom: '1rem' }}>
+                        <p style={{ fontWeight: '600', marginBottom: '0.5rem' }}>Crew Utilization:</p>
+                        {Object.entries(dispatchResult.crew_utilization).map(([crew, data]) => (
+                          <div key={crew} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.875rem', marginBottom: '0.5rem' }}>
+                            <span>{crew}: {data.total_hours} hrs / {data.jobs} jobs</span>
+                            <span style={{ color: data.utilization > 1 ? '#ea580c' : '#15803d' }}>
+                              {(data.utilization * 100).toFixed(0)}%
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <details style={{ cursor: 'pointer' }}>
+                      <summary style={{ fontWeight: '600', color: '#166534' }}>Full Schedule JSON</summary>
+                      <pre style={{ background: '#f5f5f5', padding: '1rem', borderRadius: '4px', overflow: 'auto', maxHeight: '300px', fontSize: '0.75rem', marginTop: '0.5rem' }}>
+                        {JSON.stringify(dispatchResult, null, 2)}
+                      </pre>
+                    </details>
                   </div>
                 )}
               </div>
@@ -485,6 +633,12 @@ Output JSON:
               <div>
                 <h2 style={{ fontSize: '1.3rem', fontWeight: '600', marginBottom: '1.5rem' }}>Setup & Configuration</h2>
 
+                <div style={{ marginBottom: '1.5rem', padding: '1rem', background: '#fef3c7', border: '1px solid #fcd34d', borderRadius: '4px' }}>
+                  <p style={{ margin: 0, fontSize: '0.875rem', color: '#92400e' }}>
+                    💡 Tip: API keys are stored locally in your browser. They are never sent to our servers except directly to the respective APIs.
+                  </p>
+                </div>
+
                 <div style={{ marginBottom: '1.5rem', border: '1px solid #d1d5db', borderRadius: '4px', padding: '1rem' }}>
                   <label style={{ display: 'block', fontWeight: '600', marginBottom: '0.5rem' }}>HouseCall Pro API Key</label>
                   <input
@@ -515,6 +669,32 @@ Output JSON:
                   <p style={{ fontSize: '0.875rem', color: '#6b7280', marginTop: '0.5rem' }}>Get from <a href="https://console.anthropic.com/api/keys" target="_blank" rel="noopener noreferrer" style={{ color: '#2563eb', textDecoration: 'underline' }}>Anthropic Console</a></p>
                 </div>
 
+                <div style={{ marginBottom: '1.5rem', border: '1px solid #c7d2fe', background: '#eef2ff', borderRadius: '4px', padding: '1rem' }}>
+                  <label style={{ display: 'block', fontWeight: '600', marginBottom: '0.5rem' }}>Lovable Workspace ID (Optional)</label>
+                  <input
+                    type="text"
+                    placeholder="your-workspace-id"
+                    value={settings.lovableWorkspaceId}
+                    onChange={(e) => {
+                      setSettings({ ...settings, lovableWorkspaceId: e.target.value });
+                      localStorage.setItem('lovable_workspace', e.target.value);
+                    }}
+                    style={{ width: '100%', padding: '0.5rem', border: '1px solid #d1d5db', borderRadius: '4px', marginBottom: '0.5rem' }}
+                  />
+                  <label style={{ display: 'block', fontWeight: '600', marginBottom: '0.5rem' }}>Lovable API Key (Optional)</label>
+                  <input
+                    type="password"
+                    placeholder="lovable_api_..."
+                    value={settings.lovableApiKey}
+                    onChange={(e) => {
+                      setSettings({ ...settings, lovableApiKey: e.target.value });
+                      localStorage.setItem('lovable_key', e.target.value);
+                    }}
+                    style={{ width: '100%', padding: '0.5rem', border: '1px solid #d1d5db', borderRadius: '4px' }}
+                  />
+                  <p style={{ fontSize: '0.875rem', color: '#6b7280', marginTop: '0.5rem' }}>Get from Lovable dashboard. Adds team availability & job interaction data to dispatch optimization.</p>
+                </div>
+
                 <div style={{ marginBottom: '1.5rem', border: '1px solid #d1d5db', borderRadius: '4px', padding: '1rem' }}>
                   <label style={{ display: 'block', fontWeight: '600', marginBottom: '0.5rem' }}>Historical Job Data (HouseCall Pro CSV Export)</label>
                   <input
@@ -531,9 +711,17 @@ Output JSON:
                 </div>
 
                 {liveData.historicalContext && (
+                  <div style={{ background: '#f0fdf4', border: '1px solid #86efac', borderRadius: '4px', padding: '1rem', marginBottom: '1rem' }}>
+                    <p style={{ color: '#166534', margin: 0, fontSize: '0.875rem' }}>
+                      ✓ {liveData.historicalContext.total_jobs} completed jobs loaded. Crew averages: {Object.keys(liveData.historicalContext.crew_averages).join(', ')}
+                    </p>
+                  </div>
+                )}
+
+                {liveData.teamAvailability.length > 0 && (
                   <div style={{ background: '#f0fdf4', border: '1px solid #86efac', borderRadius: '4px', padding: '1rem' }}>
-                    <p style={{ color: '#166534', margin: 0 }}>
-                      ✓ {liveData.historicalContext.total_jobs} completed jobs loaded. Crew average durations calculated.
+                    <p style={{ color: '#166534', margin: 0, fontSize: '0.875rem' }}>
+                      ✓ Lovable: {liveData.teamAvailability.length} team members, {liveData.jobInteractions.length} interaction records
                     </p>
                   </div>
                 )}
@@ -543,7 +731,7 @@ Output JSON:
         </div>
 
         <div style={{ textAlign: 'center', marginTop: '2rem', color: '#6b7280', fontSize: '0.875rem' }}>
-          <p>🚀 ACI Weekly AI Dispatch - Plan, optimize, execute.</p>
+          <p>🚀 ACI Weekly AI Dispatch - HouseCall Pro + Lovable + Claude</p>
         </div>
       </div>
     </div>
