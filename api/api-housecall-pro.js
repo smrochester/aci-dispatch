@@ -39,7 +39,7 @@ export default async function handler(req, res) {
     const response = await fetch(fullUrl, {
       method: 'GET',
       headers: {
-        'Authorization': `Bearer ${apiKey}`,
+        'Authorization': `Token ${apiKey}`,
         'Content-Type': 'application/json',
       }
     });
