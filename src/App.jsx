@@ -266,23 +266,35 @@ const ACIDispatchApp = () => {
     setSyncProgress('🤖 Claude is analyzing your complete operational picture...');
     setError(null);
 
-    const dispatchPrompt = `You are an expert dispatcher for American Cleaning Innovations (ACI) with deep knowledge of crew dynamics, geographic constraints, and operational rules.
+    const dispatchPrompt = `You are an expert dispatcher for ACI cleaning company.
 
-WEEK: ${weeklySchedule.week_start_date} (Wednesday) through ${new Date(new Date(weeklySchedule.week_start_date).getTime() + 6*24*60*60*1000).toISOString().split('T')[0]} (Tuesday)
+TASK: Create a simple JSON dispatch schedule for the week of ${weeklySchedule.week_start_date}.
 
-JOBS TO SCHEDULE (${liveData.weeklyJobs.length} total):
-${JSON.stringify(liveData.weeklyJobs.slice(0, 50), null, 2)}
+RETURN ONLY THIS JSON FORMAT (no markdown, no extra text):
+{
+  "week_start": "${weeklySchedule.week_start_date}",
+  "total_jobs": ${liveData.weeklyJobs.length},
+  "total_crew": ${liveData.availableCrew.length},
+  "schedule_summary": "Brief description of how jobs are distributed across the week",
+  "key_assignments": [
+    {
+      "day": "Wednesday",
+      "crew_count": 4,
+      "jobs_count": 9,
+      "notes": "Distribution rationale"
+    }
+  ],
+  "constraints_applied": ${JSON.stringify(weeklySchedule.crew_preferences)}
+}
 
-CREW ROSTER:
-${JSON.stringify(liveData.availableCrew, null, 2)}
+CREW ROSTER (${liveData.availableCrew.length} people):
+${JSON.stringify(liveData.availableCrew.slice(0, 10), null, 2)}
 
-CREW PREFERENCES:
+CONSTRAINTS:
 ${weeklySchedule.crew_preferences}
 
-VACATION/UNAVAILABLE:
-${weeklySchedule.vacation_blocks || 'None'}
-
-TASK: Generate optimal weekly dispatch schedule with simple JSON output showing crew assignments, start/end times, and reasoning.`;
+JOBS TO SCHEDULE (${liveData.weeklyJobs.length} total):
+${JSON.stringify(liveData.weeklyJobs.slice(0, 20), null, 2)}`;
 
     try {
       setSyncProgress('📤 Sending data to Claude via secure proxy...');
