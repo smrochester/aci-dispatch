@@ -178,7 +178,6 @@ const ACIDispatchApp = () => {
             };
           });
 
-        const avgDurationByType = {};
         const crewSpeedMultipliers = {};
 
         historicalJobs.forEach(job => {
