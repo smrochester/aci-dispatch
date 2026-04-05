@@ -161,24 +161,18 @@ const ACIDispatchApp = () => {
       setSyncProgress(`✓ Found ${jobsData.data?.length || 0} jobs. Fetching crew...`);
 
       setSyncProgress('👥 Fetching team members...');
-      const crewData = await callHouseCallProProxy('team_members', {
+      const crewData = await callHouseCallProProxy('employees', {
         limit: 50
       });
       addDebugLog('Crew data received', {
         crewCount: crewData.data?.length || 0
       });
 
-      setSyncProgress(`✓ Found ${crewData.data?.length || 0} crew. Fetching properties...`);
+      setSyncProgress(`✓ Found ${crewData.data?.length || 0} crew.`);
 
-      setSyncProgress('🏠 Fetching customer properties...');
-      const customersData = await callHouseCallProProxy('customers', {
-        limit: 500
-      });
-      addDebugLog('Properties data received', {
-        propertyCount: customersData.data?.length || 0
-      });
-
-      setSyncProgress(`✓ Found ${customersData.data?.length || 0} properties. Processing...`);
+      // Note: HouseCall Pro doesn't have a direct /customers endpoint
+      // Customer data comes from the jobs response
+      const customersData = { data: [] };
 
       const transformedJobs = (jobsData.data || [])
         .filter(job => {
