@@ -98,6 +98,34 @@ const ACIDispatchApp = () => {
     }
   };
 
+  const callHouseCallProProxy = async (endpoint, params = {}) => {
+    try {
+      const response = await fetch('/api/housecall-pro', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          endpoint,
+          apiKey: settings.housecallProApiKey,
+          params
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(`Proxy error: ${response.status} - ${JSON.stringify(errorData)}`);
+      }
+
+      const data = await response.json();
+      if (!data.success) {
+        throw new Error(`API returned: ${JSON.stringify(data)}`);
+      }
+
+      return data.data;
+    } catch (err) {
+      throw new Error(`${endpoint} failed: ${err.message}`);
+    }
+  };
+
   const syncHouseCallPro = async () => {
     if (!settings.housecallProApiKey.trim()) {
       setError('Please enter HouseCall Pro API key');
@@ -105,8 +133,8 @@ const ACIDispatchApp = () => {
       return false;
     }
 
-    setSyncProgress('🔄 Connecting to HouseCall Pro...');
-    addDebugLog('Starting HouseCall Pro sync');
+    setSyncProgress('🔄 Connecting to HouseCall Pro via secure proxy...');
+    addDebugLog('Starting HouseCall Pro sync (via backend proxy)');
     addDebugLog('API Key format', settings.housecallProApiKey.substring(0, 10) + '...');
 
     try {
@@ -122,76 +150,20 @@ const ACIDispatchApp = () => {
         end: endDate.toISOString()
       });
 
-      let jobsResponse;
-      try {
-        jobsResponse = await fetch(
-          `https://api.housecallpro.com/v2/jobs?status=scheduled,in_progress&limit=200`,
-          {
-            method: 'GET',
-            headers: {
-              'Authorization': `Bearer ${settings.housecallProApiKey}`,
-              'Content-Type': 'application/json',
-            }
-          }
-        );
-        addDebugLog('Jobs response received', {
-          status: jobsResponse.status,
-          statusText: jobsResponse.statusText,
-          ok: jobsResponse.ok
-        });
-      } catch (fetchErr) {
-        addDebugLog('CRITICAL: Jobs fetch network error', {
-          message: fetchErr.message,
-          name: fetchErr.name
-        });
-        throw new Error(`HouseCall Pro network error: ${fetchErr.message}`);
-      }
-
-      if (!jobsResponse.ok) {
-        const errorText = await jobsResponse.text();
-        addDebugLog('Jobs response error (bad status)', {
-          status: jobsResponse.status,
-          statusText: jobsResponse.statusText,
-          body: errorText
-        });
-        throw new Error(`HouseCall Pro API error: ${jobsResponse.status} ${jobsResponse.statusText} - ${errorText}`);
-      }
-
-      const jobsData = await jobsResponse.json();
+      const jobsData = await callHouseCallProProxy('jobs', {
+        status: 'scheduled,in_progress',
+        limit: 200
+      });
       addDebugLog('Jobs data received', {
-        jobCount: jobsData.data?.length || 0,
-        keys: Object.keys(jobsData)
+        jobCount: jobsData.data?.length || 0
       });
 
       setSyncProgress(`✓ Found ${jobsData.data?.length || 0} jobs. Fetching crew...`);
 
       setSyncProgress('👥 Fetching team members...');
-      addDebugLog('Fetching team members');
-
-      const crewResponse = await fetch(
-        `https://api.housecallpro.com/v2/team_members?limit=50`,
-        {
-          method: 'GET',
-          headers: {
-            'Authorization': `Bearer ${settings.housecallProApiKey}`,
-            'Content-Type': 'application/json',
-          }
-        }
-      );
-
-      addDebugLog('Team response status', crewResponse.status);
-
-      if (!crewResponse.ok) {
-        const errorText = await crewResponse.text();
-        addDebugLog('Team response error', {
-          status: crewResponse.status,
-          statusText: crewResponse.statusText,
-          body: errorText
-        });
-        throw new Error(`HouseCall Pro API error: ${crewResponse.status} - ${errorText}`);
-      }
-
-      const crewData = await crewResponse.json();
+      const crewData = await callHouseCallProProxy('team_members', {
+        limit: 50
+      });
       addDebugLog('Crew data received', {
         crewCount: crewData.data?.length || 0
       });
@@ -199,32 +171,9 @@ const ACIDispatchApp = () => {
       setSyncProgress(`✓ Found ${crewData.data?.length || 0} crew. Fetching properties...`);
 
       setSyncProgress('🏠 Fetching customer properties...');
-      addDebugLog('Fetching properties');
-
-      const customersResponse = await fetch(
-        `https://api.housecallpro.com/v2/customers?limit=500`,
-        {
-          method: 'GET',
-          headers: {
-            'Authorization': `Bearer ${settings.housecallProApiKey}`,
-            'Content-Type': 'application/json',
-          }
-        }
-      );
-
-      addDebugLog('Properties response status', customersResponse.status);
-
-      if (!customersResponse.ok) {
-        const errorText = await customersResponse.text();
-        addDebugLog('Properties response error', {
-          status: customersResponse.status,
-          statusText: customersResponse.statusText,
-          body: errorText
-        });
-        throw new Error(`HouseCall Pro API error: ${customersResponse.status} - ${errorText}`);
-      }
-
-      const customersData = await customersResponse.json();
+      const customersData = await callHouseCallProProxy('customers', {
+        limit: 500
+      });
       addDebugLog('Properties data received', {
         propertyCount: customersData.data?.length || 0
       });
@@ -280,9 +229,8 @@ const ACIDispatchApp = () => {
       const errorMsg = err instanceof Error ? err.message : String(err);
       setError(`HouseCall Pro sync failed: ${errorMsg}`);
       setSyncProgress('❌ HouseCall Pro sync failed');
-      addDebugLog('CRITICAL HouseCall Pro sync error', {
+      addDebugLog('HouseCall Pro sync error', {
         message: errorMsg,
-        type: err instanceof Error ? err.constructor.name : typeof err,
         fullError: String(err)
       });
       return false;
