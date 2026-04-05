@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 
 const ACIDispatchApp = () => {
   const [activeTab, setActiveTab] = useState('weekly');
@@ -12,11 +12,9 @@ const ACIDispatchApp = () => {
   const [settings, setSettings] = useState({
     housecallProApiKey: localStorage.getItem('hcp_key') || '',
     claudeApiKey: localStorage.getItem('claude_key') || '',
-    historicalCsvUploaded: !!localStorage.getItem('csv_uploaded'),
-    lastSync: localStorage.getItem('last_sync'),
   });
 
-  const [lovableData, setLovableData] = useState({
+  const [lovableData] = useState({
     employees: [],
     availability: [],
     jobs: [],
@@ -40,7 +38,7 @@ const ACIDispatchApp = () => {
 
   const [weeklySchedule, setWeeklySchedule] = useState({
     week_start_date: getNextWednesday(),
-    crew_preferences: 'Ira leads North (Melbourne). Leslie leads South (Palm Bay, dividing line Melbourne North). Terra floats. Porshua DEDICATED to Beach Island only. Tiara & McKayla always together (McKayla drives).',
+    crew_preferences: 'Ira leads North (Melbourne). Leslie leads South (Palm Bay). Terra floats. Porshua DEDICATED to Beach Island only. Tiara & McKayla always together.',
     vacation_blocks: '',
   });
 
@@ -55,7 +53,6 @@ const ACIDispatchApp = () => {
     return nextWednesday.toISOString().split('T')[0];
   }
 
-  // Debug logging function
   const addDebugLog = (message, data = null) => {
     const timestamp = new Date().toLocaleTimeString();
     const logEntry = data ? `[${timestamp}] ${message}: ${JSON.stringify(data, null, 2)}` : `[${timestamp}] ${message}`;
@@ -103,55 +100,7 @@ const ACIDispatchApp = () => {
       });
       if (!availabilityResult.success) throw new Error(`Failed to get availability: ${availabilityResult.error}`);
 
-      setSyncProgress('📅 Loading scheduled jobs and bookings...');
-      const jobsResult = await queryMCPServer('get_jobs', {
-        start_date: startDate,
-        end_date: endDate,
-      });
-      if (!jobsResult.success) throw new Error(`Failed to get jobs: ${jobsResult.error}`);
-
-      setSyncProgress('🔗 Checking current assignments...');
-      const assignmentsResult = await queryMCPServer('get_assignments');
-      if (!assignmentsResult.success) throw new Error(`Failed to get assignments: ${assignmentsResult.error}`);
-
-      setSyncProgress('💬 Analyzing crew engagement history...');
-      const whatsappResult = await queryMCPServer('get_whatsapp_sessions', { days: 30 });
-
-      setSyncProgress('🏠 Loading property details and requirements...');
-      const propertiesResult = await queryMCPServer('get_properties');
-      if (!propertiesResult.success) throw new Error(`Failed to get properties: ${propertiesResult.error}`);
-
-      setSyncProgress('👤 Loading client info and preferences...');
-      const clientsResult = await queryMCPServer('get_clients');
-      if (!clientsResult.success) throw new Error(`Failed to get clients: ${clientsResult.error}`);
-
-      setSyncProgress('⏱️ Analyzing historical time entries...');
-      const timeEntriesResult = await queryMCPServer('get_time_entries', { days: 90 });
-
-      setSyncProgress('🔍 Checking QA findings and quality issues...');
-      const qaResult = await queryMCPServer('get_qa_findings', { days: 60 });
-
-      setSyncProgress('🛏️ Loading guest bookings and turnover info...');
-      const bookingsResult = await queryMCPServer('get_bookings', {
-        start_date: startDate,
-        end_date: endDate,
-      });
-
-      setLovableData({
-        employees: employeesResult.data?.employees || [],
-        availability: availabilityResult.data?.availability || [],
-        jobs: jobsResult.data?.jobs || [],
-        assignments: assignmentsResult.data?.assignments || [],
-        whatsappSessions: whatsappResult.data?.sessions || [],
-        properties: propertiesResult.data?.properties || [],
-        clients: clientsResult.data?.clients || [],
-        timeEntries: timeEntriesResult.data?.time_entries || [],
-        qaFindings: qaResult.data?.findings || [],
-        bookings: bookingsResult.data?.bookings || [],
-        lastUpdated: new Date().toLocaleTimeString(),
-      });
-
-      setSyncProgress(`✓ CleanOps synced: ${(employeesResult.data?.employees || []).length} employees, ${(jobsResult.data?.jobs || []).length} jobs`);
+      setSyncProgress('✓ Lovable synced (simplified for debug)');
       addDebugLog('Lovable sync successful');
       return true;
     } catch (err) {
@@ -335,8 +284,6 @@ const ACIDispatchApp = () => {
     }
   };
 
-
-
   const generateWeeklyDispatch = async () => {
     if (!settings.claudeApiKey.trim()) {
       setError('Please enter Claude API key');
@@ -354,23 +301,13 @@ const ACIDispatchApp = () => {
 
     const dispatchPrompt = `You are an expert dispatcher for American Cleaning Innovations (ACI) with deep knowledge of crew dynamics, geographic constraints, and operational rules.
 
-IMPORTANT: You understand:
-- Ira leads North (Melbourne base), Leslie leads South (Palm Bay base)
-- Porshua is DEDICATED to Beach Island Resort only (never assign elsewhere)
-- Tiara & McKayla are a team (always together, McKayla doesn't drive)
-- Same-day turnovers with hard guest check-ins = highest priority
-- New crew (Porshua day 2, Christina, Stephanie) = pair with experienced leads
-- Geographic clustering: Cocoa Beach → Melbourne Beach → Satellite Beach is natural path
-- Elise Johnson properties have special laundry coordination needs
-- Lead + new crew combo is ONE unit of work (one supervising, one training)
-
 WEEK: ${weeklySchedule.week_start_date} (Wednesday) through ${new Date(new Date(weeklySchedule.week_start_date).getTime() + 6*24*60*60*1000).toISOString().split('T')[0]} (Tuesday)
 
 JOBS TO SCHEDULE (${liveData.weeklyJobs.length} total):
 ${JSON.stringify(liveData.weeklyJobs.slice(0, 50), null, 2)}
 
-CREW ROSTER (from Lovable CleanOps):
-${JSON.stringify(lovableData.employees.slice(0, 20), null, 2)}
+CREW ROSTER:
+${JSON.stringify(liveData.availableCrew, null, 2)}
 
 CREW PREFERENCES:
 ${weeklySchedule.crew_preferences}
@@ -378,9 +315,7 @@ ${weeklySchedule.crew_preferences}
 VACATION/UNAVAILABLE:
 ${weeklySchedule.vacation_blocks || 'None'}
 
-TASK: Generate optimal weekly dispatch schedule respecting all constraints and business rules.
-
-Output JSON with DETAILED crew assignments and reasoning`;
+TASK: Generate optimal weekly dispatch schedule with simple JSON output showing crew assignments, start/end times, and reasoning.`;
 
     try {
       setSyncProgress('📤 Sending data to Claude...');
@@ -392,7 +327,7 @@ Output JSON with DETAILED crew assignments and reasoning`;
         },
         body: JSON.stringify({
           model: 'claude-opus-4-20250514',
-          max_tokens: 3500,
+          max_tokens: 2000,
           messages: [{ role: 'user', content: dispatchPrompt }]
         })
       });
@@ -444,7 +379,7 @@ Output JSON with DETAILED crew assignments and reasoning`;
           <h1 style={{ fontSize: '2rem', fontWeight: 'bold', color: '#1f2937', margin: '0 0 0.5rem 0' }}>
             ⚡ ACI Weekly AI Dispatch
           </h1>
-          <p style={{ color: '#6b7280', margin: 0 }}>Complete CleanOps Intelligence + Daily Scheduling Briefs</p>
+          <p style={{ color: '#6b7280', margin: 0 }}>Debug Mode - HouseCall Pro API Testing</p>
         </div>
 
         {syncProgress && (
@@ -467,10 +402,10 @@ Output JSON with DETAILED crew assignments and reasoning`;
         )}
 
         {debugLog.length > 0 && (
-          <div style={{ background: '#f5f5f5', border: '1px solid #d1d5db', borderRadius: '8px', padding: '1rem', marginBottom: '1.5rem', maxHeight: '300px', overflow: 'auto' }}>
+          <div style={{ background: '#f5f5f5', border: '1px solid #d1d5db', borderRadius: '8px', padding: '1rem', marginBottom: '1.5rem', maxHeight: '400px', overflow: 'auto' }}>
             <div style={{ fontSize: '0.875rem', fontWeight: '600', marginBottom: '0.5rem' }}>📋 Debug Log:</div>
             {debugLog.map((log, i) => (
-              <div key={i} style={{ fontSize: '0.75rem', fontFamily: 'monospace', marginBottom: '0.5rem', color: '#666' }}>
+              <div key={i} style={{ fontSize: '0.75rem', fontFamily: 'monospace', marginBottom: '0.5rem', color: '#333', lineHeight: '1.4', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
                 {log}
               </div>
             ))}
@@ -481,8 +416,6 @@ Output JSON with DETAILED crew assignments and reasoning`;
           <div style={{ display: 'flex', borderBottom: '1px solid #e5e7eb' }}>
             {[
               { id: 'weekly', label: '📊 Weekly Dispatch' },
-              { id: 'daily', label: '📋 Daily Briefs' },
-              { id: 'history', label: '📚 Past Schedules' },
               { id: 'settings', label: '⚙️ Setup' },
             ].map(tab => (
               <button
@@ -600,26 +533,15 @@ Output JSON with DETAILED crew assignments and reasoning`;
                     }}
                     style={{ width: '100%', padding: '0.5rem', border: '1px solid #d1d5db', borderRadius: '4px' }}
                   />
+                  <p style={{ fontSize: '0.875rem', color: '#6b7280', marginTop: '0.5rem' }}>Get from <a href="https://console.anthropic.com/api/keys" target="_blank" rel="noopener noreferrer" style={{ color: '#2563eb', textDecoration: 'underline' }}>Anthropic Console</a></p>
                 </div>
-              </div>
-            )}
-
-            {activeTab === 'daily' && (
-              <div>
-                <p style={{ color: '#6b7280' }}>Generate a weekly schedule first</p>
-              </div>
-            )}
-
-            {activeTab === 'history' && (
-              <div>
-                <p style={{ color: '#6b7280' }}>No schedules saved yet</p>
               </div>
             )}
           </div>
         </div>
 
         <div style={{ textAlign: 'center', marginTop: '2rem', color: '#6b7280', fontSize: '0.875rem' }}>
-          <p>🚀 ACI Weekly AI Dispatch</p>
+          <p>🚀 ACI Weekly AI Dispatch - Debug Version</p>
         </div>
       </div>
     </div>
