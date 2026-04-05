@@ -151,8 +151,8 @@ const ACIDispatchApp = () => {
       });
 
       const jobsData = await callHouseCallProProxy('jobs', {
-        status: 'scheduled,in_progress',
-        limit: 200
+        page: 1,
+        page_size: 200
       });
       addDebugLog('Jobs data received', {
         jobCount: jobsData.data?.length || 0
@@ -162,7 +162,8 @@ const ACIDispatchApp = () => {
 
       setSyncProgress('👥 Fetching team members...');
       const crewData = await callHouseCallProProxy('employees', {
-        limit: 50
+        page: 1,
+        page_size: 200
       });
       addDebugLog('Crew data received', {
         crewCount: crewData.data?.length || 0
