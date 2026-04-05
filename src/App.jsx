@@ -158,40 +158,81 @@ const ACIDispatchApp = () => {
     if (!file) return;
 
     setLoading(true);
-    setStatus('Processing historical CSV...');
+    setStatus('Processing historical CSV from HouseCall Pro...');
 
     const reader = new FileReader();
     reader.onload = async (e) => {
       try {
         const csv = e.target.result;
-        const lines = csv.split('\n').slice(1);
+        const lines = csv.split('\n').filter(line => line.trim());
+        
+        if (lines.length < 2) {
+          throw new Error('CSV file is empty');
+        }
 
-        const historicalJobs = lines
-          .filter(line => line.trim())
-          .map(line => {
-            const [date, property_id, cleaner_id, duration] = line.split(',');
-            return {
-              date: date.trim(),
-              property_id: property_id.trim(),
-              cleaner_id: cleaner_id.trim(),
-              actual_duration: parseInt(duration),
-            };
-          });
-
-        const crewSpeedMultipliers = {};
-
-        historicalJobs.forEach(job => {
-          if (!crewSpeedMultipliers[job.cleaner_id]) {
-            crewSpeedMultipliers[job.cleaner_id] = { total: 0, count: 0 };
+        // HouseCall Pro export has headers in first row
+        // Skip header row and parse data
+        const historicalJobs = [];
+        
+        for (let i = 1; i < lines.length; i++) {
+          try {
+            // Parse CSV line carefully (handle quoted fields)
+            const line = lines[i];
+            if (!line.trim()) continue;
+            
+            // Extract key fields from HouseCall Pro format:
+            // Job #,Job status,Customer name,Address,Job scheduled end date,Job completed date,Assigned employees,Job type,Job amount,Due amount,Invoice last sent date,Payment status,Paid amount,Job duration,Total duration,Total time on job by employee,Total labor hours
+            
+            const parts = line.split(',');
+            if (parts.length < 14) continue;
+            
+            const jobId = parts[0]?.replace(/[="]/g, '').trim();
+            const status = parts[1]?.trim();
+            const customerName = parts[2]?.replace(/"/g, '').trim();
+            const jobDuration = parseFloat(parts[13]?.replace(/"/g, '').trim()) || 0;
+            const assignedEmployees = parts[6]?.replace(/"/g, '').trim() || 'Unknown';
+            
+            // Only include completed jobs
+            if (status !== 'Completed' || !jobDuration) continue;
+            
+            historicalJobs.push({
+              job_id: jobId,
+              customer: customerName,
+              assigned_employees: assignedEmployees,
+              actual_duration: Math.round(jobDuration * 60), // Convert to minutes
+            });
+          } catch (lineError) {
+            // Skip problematic lines
+            continue;
           }
-          crewSpeedMultipliers[job.cleaner_id].total += job.actual_duration;
-          crewSpeedMultipliers[job.cleaner_id].count += 1;
+        }
+
+        if (historicalJobs.length === 0) {
+          throw new Error('No completed jobs found in CSV. Make sure you exported from HouseCall Pro with "Completed" status.');
+        }
+
+        // Calculate average duration by employee
+        const crewAverages = {};
+        historicalJobs.forEach(job => {
+          const crews = job.assigned_employees.split(',').map(c => c.trim());
+          crews.forEach(crew => {
+            if (!crewAverages[crew]) {
+              crewAverages[crew] = { total: 0, count: 0 };
+            }
+            crewAverages[crew].total += job.actual_duration;
+            crewAverages[crew].count += 1;
+          });
+        });
+
+        Object.keys(crewAverages).forEach(crew => {
+          crewAverages[crew] = Math.round(crewAverages[crew].total / crewAverages[crew].count);
         });
 
         const historicalContext = {
           total_jobs: historicalJobs.length,
-          crew_speed_multipliers: crewSpeedMultipliers,
+          crew_averages: crewAverages,
           processed_at: new Date().toLocaleTimeString(),
+          data_source: 'HouseCall Pro Export',
         };
 
         setLiveData(prev => ({
@@ -203,9 +244,9 @@ const ACIDispatchApp = () => {
         const newSettings = { ...settings, historicalCsvUploaded: true };
         setSettings(newSettings);
 
-        setStatus(`✓ Processed ${historicalJobs.length} historical jobs.`);
+        setStatus(`✓ Processed ${historicalJobs.length} completed jobs from HouseCall Pro`);
       } catch (err) {
-        setError(`CSV processing failed: ${err.message}`);
+        setError(`CSV processing failed: ${err.message}. Make sure this is a HouseCall Pro job export.`);
       } finally {
         setLoading(false);
       }
@@ -234,10 +275,13 @@ const ACIDispatchApp = () => {
 WEEK: ${weeklySchedule.week_start_date} (Wednesday) through ${new Date(new Date(weeklySchedule.week_start_date).getTime() + 6*24*60*60*1000).toISOString().split('T')[0]} (Tuesday)
 
 JOBS (${liveData.weeklyJobs.length} total):
-${JSON.stringify(liveData.weeklyJobs, null, 2)}
+${JSON.stringify(liveData.weeklyJobs.slice(0, 50), null, 2)}
 
 CREW:
 ${JSON.stringify(liveData.availableCrew, null, 2)}
+
+HISTORICAL DATA FROM HOUSECALL PRO:
+${liveData.historicalContext ? JSON.stringify(liveData.historicalContext, null, 2) : 'No historical data loaded'}
 
 CREW PREFERENCES:
 ${weeklySchedule.crew_preferences}
@@ -303,7 +347,6 @@ Output JSON:
   return (
     <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg, #f0f4f8 0%, #d9e8f5 100%)', padding: '2rem' }}>
       <div style={{ maxWidth: '1200px', margin: '0 auto' }}>
-        {/* Header */}
         <div style={{ background: 'white', borderRadius: '8px', boxShadow: '0 2px 8px rgba(0,0,0,0.1)', padding: '2rem', marginBottom: '1.5rem' }}>
           <h1 style={{ fontSize: '2rem', fontWeight: 'bold', color: '#1f2937', margin: '0 0 0.5rem 0' }}>
             ⚡ ACI Weekly AI Dispatch
@@ -311,7 +354,6 @@ Output JSON:
           <p style={{ color: '#6b7280', margin: 0 }}>Plan your entire week on Sunday. Optimize automatically.</p>
         </div>
 
-        {/* Status Messages */}
         {status && (
           <div style={{ background: '#dbeafe', border: '1px solid #93c5fd', borderRadius: '8px', padding: '1rem', marginBottom: '1.5rem', color: '#1e40af' }}>
             {status}
@@ -324,9 +366,7 @@ Output JSON:
           </div>
         )}
 
-        {/* Main Container */}
         <div style={{ background: 'white', borderRadius: '8px', boxShadow: '0 2px 8px rgba(0,0,0,0.1)', overflow: 'hidden' }}>
-          {/* Tabs */}
           <div style={{ display: 'flex', borderBottom: '1px solid #e5e7eb' }}>
             {[
               { id: 'weekly', label: '📊 Weekly Dispatch' },
@@ -344,7 +384,6 @@ Output JSON:
                   color: activeTab === tab.id ? 'white' : '#4b5563',
                   fontWeight: '600',
                   cursor: 'pointer',
-                  transition: 'all 0.2s',
                 }}
               >
                 {tab.label}
@@ -352,9 +391,7 @@ Output JSON:
             ))}
           </div>
 
-          {/* Tab Content */}
           <div style={{ padding: '2rem' }}>
-            {/* Weekly Dispatch Tab */}
             {activeTab === 'weekly' && (
               <div>
                 <h2 style={{ fontSize: '1.3rem', fontWeight: '600', marginBottom: '1.5rem' }}>Generate Weekly Schedule</h2>
@@ -391,7 +428,7 @@ Output JSON:
                     border: 'none',
                     borderRadius: '4px',
                     fontWeight: '600',
-                    cursor: loading || !settings.housecallProApiKey || !settings.claudeApiKey ? 'not-allowed' : 'pointer',
+                    cursor: 'pointer',
                   }}
                 >
                   {loading ? 'Generating...' : 'Generate Schedule'}
@@ -408,7 +445,6 @@ Output JSON:
               </div>
             )}
 
-            {/* Past Schedules Tab */}
             {activeTab === 'history' && (
               <div>
                 <h2 style={{ fontSize: '1.3rem', fontWeight: '600', marginBottom: '1.5rem' }}>Past Schedules</h2>
@@ -445,7 +481,6 @@ Output JSON:
               </div>
             )}
 
-            {/* Settings Tab */}
             {activeTab === 'settings' && (
               <div>
                 <h2 style={{ fontSize: '1.3rem', fontWeight: '600', marginBottom: '1.5rem' }}>Setup & Configuration</h2>
@@ -481,7 +516,7 @@ Output JSON:
                 </div>
 
                 <div style={{ marginBottom: '1.5rem', border: '1px solid #d1d5db', borderRadius: '4px', padding: '1rem' }}>
-                  <label style={{ display: 'block', fontWeight: '600', marginBottom: '0.5rem' }}>Historical Job Data (CSV)</label>
+                  <label style={{ display: 'block', fontWeight: '600', marginBottom: '0.5rem' }}>Historical Job Data (HouseCall Pro CSV Export)</label>
                   <input
                     type="file"
                     ref={csvFileRef}
@@ -489,14 +524,17 @@ Output JSON:
                     accept=".csv"
                     style={{ width: '100%' }}
                   />
+                  <p style={{ fontSize: '0.875rem', color: '#6b7280', marginTop: '0.5rem' }}>Export from HouseCall Pro: Reports → Jobs → Export (select "Completed" status)</p>
                   {settings.historicalCsvUploaded && (
                     <p style={{ fontSize: '0.875rem', color: '#15803d', marginTop: '0.5rem' }}>✓ Historical data loaded</p>
                   )}
                 </div>
 
-                {settings.lastSync && (
+                {liveData.historicalContext && (
                   <div style={{ background: '#f0fdf4', border: '1px solid #86efac', borderRadius: '4px', padding: '1rem' }}>
-                    <p style={{ color: '#166534', margin: 0 }}>✓ Last synced: {new Date(settings.lastSync).toLocaleString()}</p>
+                    <p style={{ color: '#166534', margin: 0 }}>
+                      ✓ {liveData.historicalContext.total_jobs} completed jobs loaded. Crew average durations calculated.
+                    </p>
                   </div>
                 )}
               </div>
@@ -504,7 +542,6 @@ Output JSON:
           </div>
         </div>
 
-        {/* Footer */}
         <div style={{ textAlign: 'center', marginTop: '2rem', color: '#6b7280', fontSize: '0.875rem' }}>
           <p>🚀 ACI Weekly AI Dispatch - Plan, optimize, execute.</p>
         </div>
