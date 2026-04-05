@@ -5,12 +5,9 @@ const ACIDispatchApp = () => {
   const [loading, setLoading] = useState(false);
   const [syncProgress, setSyncProgress] = useState('');
   const [dispatchResult, setDispatchResult] = useState(null);
-  const [dailyBrief, setDailyBrief] = useState(null);
-  const [selectedDay, setSelectedDay] = useState(null);
   const [error, setError] = useState(null);
   const [status, setStatus] = useState('');
   const [debugLog, setDebugLog] = useState([]);
-  const [savedSchedules, setSavedSchedules] = useState([]);
   
   const [settings, setSettings] = useState({
     housecallProApiKey: localStorage.getItem('hcp_key') || '',
@@ -47,7 +44,6 @@ const ACIDispatchApp = () => {
     vacation_blocks: '',
   });
 
-  const csvFileRef = useRef(null);
   const MCP_ENDPOINT = 'https://kpwafdzgvqbtohvbkxbu.supabase.co/functions/v1/mcp-server';
 
   function getNextWednesday() {
@@ -68,20 +64,8 @@ const ACIDispatchApp = () => {
   };
 
   useEffect(() => {
-    loadPastSchedules();
+    // Initialize on mount
   }, []);
-
-  const savePastSchedule = async (weekStart, scheduleData) => {
-    const allSchedules = JSON.parse(localStorage.getItem('past_schedules') || '{}');
-    allSchedules[weekStart] = scheduleData;
-    localStorage.setItem('past_schedules', JSON.stringify(allSchedules));
-    setStatus(`✓ Schedule saved`);
-  };
-
-  const loadPastSchedules = () => {
-    const schedules = JSON.parse(localStorage.getItem('past_schedules') || '{}');
-    setSavedSchedules(Object.keys(schedules).sort().reverse());
-  };
 
   const queryMCPServer = async (tool, params = {}) => {
     try {
@@ -351,95 +335,7 @@ const ACIDispatchApp = () => {
     }
   };
 
-  const handleCsvUpload = async (event) => {
-    const file = event.target.files[0];
-    if (!file) return;
 
-    setLoading(true);
-    setSyncProgress('📂 Processing historical CSV from HouseCall Pro...');
-
-    const reader = new FileReader();
-    reader.onload = async (e) => {
-      try {
-        const csv = e.target.result;
-        const lines = csv.split('\n').filter(line => line.trim());
-        
-        if (lines.length < 2) throw new Error('CSV file is empty');
-
-        setSyncProgress(`📊 Parsing ${lines.length} rows...`);
-
-        const historicalJobs = [];
-        
-        for (let i = 1; i < lines.length; i++) {
-          try {
-            const line = lines[i];
-            if (!line.trim()) continue;
-            
-            const parts = line.split(',');
-            if (parts.length < 14) continue;
-            
-            const jobId = parts[0]?.replace(/[="]/g, '').trim();
-            const statusField = parts[1]?.trim();
-            const customerName = parts[2]?.replace(/"/g, '').trim();
-            const jobDuration = parseFloat(parts[13]?.replace(/"/g, '').trim()) || 0;
-            const assignedEmployees = parts[6]?.replace(/"/g, '').trim() || 'Unknown';
-            
-            if (statusField !== 'Completed' || !jobDuration) continue;
-            
-            historicalJobs.push({
-              job_id: jobId,
-              customer: customerName,
-              assigned_employees: assignedEmployees,
-              actual_duration: Math.round(jobDuration * 60),
-            });
-          } catch (lineError) {
-            continue;
-          }
-        }
-
-        if (historicalJobs.length === 0) throw new Error('No completed jobs found in CSV.');
-
-        setSyncProgress(`✓ Analyzed ${historicalJobs.length} completed jobs. Calculating crew averages...`);
-
-        const crewAverages = {};
-        historicalJobs.forEach(job => {
-          const crews = job.assigned_employees.split(',').map(c => c.trim());
-          crews.forEach(crew => {
-            if (!crewAverages[crew]) {
-              crewAverages[crew] = { total: 0, count: 0 };
-            }
-            crewAverages[crew].total += job.actual_duration;
-            crewAverages[crew].count += 1;
-          });
-        });
-
-        Object.keys(crewAverages).forEach(crew => {
-          crewAverages[crew] = Math.round(crewAverages[crew].total / crewAverages[crew].count);
-        });
-
-        const historicalContext = {
-          total_jobs: historicalJobs.length,
-          crew_averages: crewAverages,
-          processed_at: new Date().toLocaleTimeString(),
-          data_source: 'HouseCall Pro Export',
-        };
-
-        setLiveData(prev => ({ ...prev, historicalContext }));
-        localStorage.setItem('csv_uploaded', 'true');
-        const newSettings = { ...settings, historicalCsvUploaded: true };
-        setSettings(newSettings);
-
-        setSyncProgress(`✓ CSV processed: ${historicalJobs.length} jobs analyzed`);
-      } catch (err) {
-        setError(`CSV processing failed: ${err.message}`);
-        setSyncProgress('❌ CSV processing failed');
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    reader.readAsText(file);
-  };
 
   const generateWeeklyDispatch = async () => {
     if (!settings.claudeApiKey.trim()) {
