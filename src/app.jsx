@@ -1,36 +1,4 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { AlertCircle, Clock, MapPin, User, Plus, RefreshCw, ChevronDown, Calendar, Zap, Database, Plug, Download, Upload, BarChart3, TrendingUp, Cloud, Save } from 'lucide-react';
-
-// Firebase initialization (optional, will work without it)
-let db = null;
-let firebaseReady = false;
-
-const initializeFirebase = async () => {
-  if (typeof window !== 'undefined' && !firebaseReady) {
-    try {
-      if (process.env.REACT_APP_FIREBASE_API_KEY) {
-        const { initializeApp } = await import('firebase/app');
-        const { getDatabase } = await import('firebase/database');
-        
-        const firebaseConfig = {
-          apiKey: process.env.REACT_APP_FIREBASE_API_KEY,
-          authDomain: process.env.REACT_APP_FIREBASE_AUTH_DOMAIN,
-          databaseURL: process.env.REACT_APP_FIREBASE_DATABASE_URL,
-          projectId: process.env.REACT_APP_FIREBASE_PROJECT_ID,
-          storageBucket: process.env.REACT_APP_FIREBASE_STORAGE_BUCKET,
-          messagingSenderId: process.env.REACT_APP_FIREBASE_MESSAGING_SENDER_ID,
-          appId: process.env.REACT_APP_FIREBASE_APP_ID,
-        };
-        
-        const app = initializeApp(firebaseConfig);
-        db = getDatabase(app);
-        firebaseReady = true;
-      }
-    } catch (err) {
-      console.log('Firebase offline mode; data will be stored locally');
-    }
-  }
-};
 
 const ACIDispatchApp = () => {
   const [activeTab, setActiveTab] = useState('weekly');
@@ -40,7 +8,6 @@ const ACIDispatchApp = () => {
   const [status, setStatus] = useState('');
   const [savedSchedules, setSavedSchedules] = useState([]);
   
-  // Settings & Credentials
   const [settings, setSettings] = useState({
     housecallProApiKey: localStorage.getItem('hcp_key') || '',
     claudeApiKey: localStorage.getItem('claude_key') || '',
@@ -48,7 +15,6 @@ const ACIDispatchApp = () => {
     lastSync: localStorage.getItem('last_sync'),
   });
 
-  // Live data
   const [liveData, setLiveData] = useState({
     weeklyJobs: [],
     availableCrew: [],
@@ -57,19 +23,14 @@ const ACIDispatchApp = () => {
     lastUpdated: null,
   });
 
-  // Weekly scheduling
   const [weeklySchedule, setWeeklySchedule] = useState({
     week_start_date: getNextWednesday(),
-    week_type: 'wed_to_tue',
-    mode: 'optimize',
-    adjustment_requests: '',
     crew_preferences: 'Standard rotation',
     vacation_blocks: '',
   });
 
   const csvFileRef = useRef(null);
 
-  // Helper: Get next Wednesday
   function getNextWednesday() {
     const today = new Date();
     const day = today.getDay();
@@ -79,48 +40,22 @@ const ACIDispatchApp = () => {
     return nextWednesday.toISOString().split('T')[0];
   }
 
-  // Initialize Firebase on mount
   useEffect(() => {
-    initializeFirebase();
     loadPastSchedules();
   }, []);
 
-  // Save to Firebase
-  const saveToFirebase = async (path, data) => {
-    if (firebaseReady && db) {
-      try {
-        const { ref, set } = await import('firebase/database');
-        await set(ref(db, path), {
-          ...data,
-          saved_at: new Date().toISOString(),
-        });
-        return true;
-      } catch (err) {
-        console.log('Firebase save failed; using local storage');
-        return false;
-      }
-    }
-    return false;
-  };
-
   const savePastSchedule = async (weekStart, scheduleData) => {
-    // Save to Firebase
-    await saveToFirebase(`schedules/${weekStart}`, scheduleData);
-
-    // Also save to local storage as backup
     const allSchedules = JSON.parse(localStorage.getItem('past_schedules') || '{}');
     allSchedules[weekStart] = scheduleData;
     localStorage.setItem('past_schedules', JSON.stringify(allSchedules));
-
     setStatus(`✓ Schedule saved`);
   };
 
-  const loadPastSchedules = async () => {
+  const loadPastSchedules = () => {
     const schedules = JSON.parse(localStorage.getItem('past_schedules') || '{}');
     setSavedSchedules(Object.keys(schedules).sort().reverse());
   };
 
-  // Sync with HouseCall Pro
   const syncHouseCallPro = async () => {
     if (!settings.housecallProApiKey.trim()) {
       setError('Please enter HouseCall Pro API key');
@@ -136,7 +71,6 @@ const ACIDispatchApp = () => {
       const endDate = new Date(startDate);
       endDate.setDate(endDate.getDate() + 6);
 
-      // Fetch jobs
       const jobsResponse = await fetch(
         `https://api.housecallpro.com/v2/jobs?status=scheduled,in_progress&limit=200`,
         {
@@ -153,7 +87,6 @@ const ACIDispatchApp = () => {
 
       const jobsData = await jobsResponse.json();
 
-      // Fetch crew
       const crewResponse = await fetch(
         `https://api.housecallpro.com/v2/team_members?limit=50`,
         {
@@ -166,7 +99,6 @@ const ACIDispatchApp = () => {
 
       const crewData = await crewResponse.json();
 
-      // Fetch customers
       const customersResponse = await fetch(
         `https://api.housecallpro.com/v2/customers?limit=500`,
         {
@@ -179,7 +111,6 @@ const ACIDispatchApp = () => {
 
       const customersData = await customersResponse.json();
 
-      // Transform data
       const transformedJobs = (jobsData.data || [])
         .filter(job => {
           const jobDate = new Date(job.scheduled_start_time);
@@ -188,39 +119,18 @@ const ACIDispatchApp = () => {
         .map(job => ({
           id: job.id,
           property: job.customer?.business_name || job.customer?.name || 'Unknown',
-          property_id: job.customer?.id,
-          type: job.location?.name?.toLowerCase().includes('vacation') ? 'vr_turnover' : 'residential',
-          scheduled_start: job.scheduled_start_time,
-          scheduled_end: job.scheduled_end_time,
           duration_estimate: job.estimate_minutes || 120,
-          address: job.location?.address,
-          assigned_crew: job.assigned_team_member?.name,
-          assigned_crew_id: job.assigned_team_member?.id,
-          status: job.status,
-          priority: job.is_emergency ? 'high' : 'medium',
-          notes: job.notes,
-          day_of_week: new Date(job.scheduled_start_time).toLocaleString('en-US', { weekday: 'short' }),
+          type: job.location?.name?.toLowerCase().includes('vacation') ? 'vr_turnover' : 'residential',
         }));
 
       const transformedCrew = (crewData.data || []).map(member => ({
         id: member.id,
         name: member.name,
-        phone: member.phone,
-        availability_start: member.availability?.start_time || '08:00',
-        availability_end: member.availability?.end_time || '17:00',
-        current_location: member.last_location?.address,
-        status: member.status,
-        is_available: member.status === 'active',
-        weekly_hours_available: 40,
       }));
 
       const transformedCustomers = (customersData.data || []).map(customer => ({
         id: customer.id,
         name: customer.business_name || customer.name,
-        address: customer.primary_address,
-        sqft: customer.sqft,
-        type: customer.type || 'residential',
-        notes: customer.notes,
       }));
 
       setLiveData(prev => ({
@@ -243,7 +153,6 @@ const ACIDispatchApp = () => {
     }
   };
 
-  // Upload CSV
   const handleCsvUpload = async (event) => {
     const file = event.target.files[0];
     if (!file) return;
@@ -260,28 +169,19 @@ const ACIDispatchApp = () => {
         const historicalJobs = lines
           .filter(line => line.trim())
           .map(line => {
-            const [date, property_id, cleaner_id, duration, job_type, notes] = line.split(',');
+            const [date, property_id, cleaner_id, duration] = line.split(',');
             return {
               date: date.trim(),
               property_id: property_id.trim(),
               cleaner_id: cleaner_id.trim(),
               actual_duration: parseInt(duration),
-              job_type: job_type.trim(),
-              notes: notes?.trim(),
             };
           });
 
-        // Analyze patterns
         const avgDurationByType = {};
         const crewSpeedMultipliers = {};
 
         historicalJobs.forEach(job => {
-          if (!avgDurationByType[job.job_type]) {
-            avgDurationByType[job.job_type] = { total: 0, count: 0 };
-          }
-          avgDurationByType[job.job_type].total += job.actual_duration;
-          avgDurationByType[job.job_type].count += 1;
-
           if (!crewSpeedMultipliers[job.cleaner_id]) {
             crewSpeedMultipliers[job.cleaner_id] = { total: 0, count: 0 };
           }
@@ -289,21 +189,8 @@ const ACIDispatchApp = () => {
           crewSpeedMultipliers[job.cleaner_id].count += 1;
         });
 
-        Object.keys(avgDurationByType).forEach(type => {
-          avgDurationByType[type] = Math.round(avgDurationByType[type].total / avgDurationByType[type].count);
-        });
-
-        const overallAvg = Object.values(avgDurationByType).reduce((a, b) => a + b, 0) / 
-                          Object.values(avgDurationByType).length;
-        
-        Object.keys(crewSpeedMultipliers).forEach(crew => {
-          const crewAvg = crewSpeedMultipliers[crew].total / crewSpeedMultipliers[crew].count;
-          crewSpeedMultipliers[crew] = (overallAvg / crewAvg).toFixed(2);
-        });
-
         const historicalContext = {
           total_jobs: historicalJobs.length,
-          avg_duration_by_type: avgDurationByType,
           crew_speed_multipliers: crewSpeedMultipliers,
           processed_at: new Date().toLocaleTimeString(),
         };
@@ -328,7 +215,6 @@ const ACIDispatchApp = () => {
     reader.readAsText(file);
   };
 
-  // Generate dispatch
   const generateWeeklyDispatch = async () => {
     if (!settings.claudeApiKey.trim()) {
       setError('Please enter Claude API key');
@@ -349,55 +235,34 @@ const ACIDispatchApp = () => {
 WEEK: ${weeklySchedule.week_start_date} (Wednesday) through ${new Date(new Date(weeklySchedule.week_start_date).getTime() + 6*24*60*60*1000).toISOString().split('T')[0]} (Tuesday)
 
 JOBS (${liveData.weeklyJobs.length} total):
-${JSON.stringify(liveData.weeklyJobs.slice(0, 50), null, 2)}
+${JSON.stringify(liveData.weeklyJobs, null, 2)}
 
-CREW (40 hours/week each):
+CREW:
 ${JSON.stringify(liveData.availableCrew, null, 2)}
-
-HISTORICAL PATTERNS:
-${JSON.stringify(liveData.historicalContext, null, 2)}
 
 CREW PREFERENCES:
 ${weeklySchedule.crew_preferences}
 
-VACATION/UNAVAILABLE:
-${weeklySchedule.vacation_blocks || 'None'}
-
-OPTIMIZATION GOALS (priority order):
-1. Respect hard deadlines (VR turnovers)
-2. Balance crew workload (no one over 40 hrs)
-3. Geographic clustering
-4. Crew preferences
-5. Recurring clients stay with same crew
-6. Build buffer time
-
-TASK: Generate weekly schedule with crew assignments, start/end times, confidence levels, risks, and contingencies.
+TASK: Generate weekly dispatch schedule with crew assignments, times, and confidence levels.
 
 Output JSON:
 {
   "weekly_schedule": [
     {
       "date": "2024-XX-XX",
-      "day_of_week": "Wednesday",
       "jobs": [
         {
           "job_id": "...",
-          "property": "...",
           "assigned_crew": "...",
           "start_time": "HH:MM",
           "end_time": "HH:MM",
-          "confidence": 90,
-          "type": "residential|vr_turnover|commercial"
+          "confidence": 90
         }
       ]
     }
   ],
-  "crew_utilization": {
-    "Name": { "total_hours": 38.5, "jobs": 12, "utilization": 0.96 }
-  },
-  "summary": "...",
-  "risks": ["..."],
-  "recommendations": ["..."]
+  "crew_utilization": {},
+  "summary": "..."
 }`;
 
     try {
@@ -409,7 +274,7 @@ Output JSON:
         },
         body: JSON.stringify({
           model: 'claude-opus-4-20250514',
-          max_tokens: 4000,
+          max_tokens: 2000,
           messages: [{ role: 'user', content: dispatchPrompt }]
         })
       });
@@ -437,36 +302,33 @@ Output JSON:
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4 md:p-8">
-      <div className="max-w-7xl mx-auto">
+    <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg, #f0f4f8 0%, #d9e8f5 100%)', padding: '2rem' }}>
+      <div style={{ maxWidth: '1200px', margin: '0 auto' }}>
         {/* Header */}
-        <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
-          <div className="flex items-center gap-3 mb-4">
-            <Cloud className="w-8 h-8 text-blue-600" />
-            <h1 className="text-3xl font-bold text-gray-800">ACI Weekly AI Dispatch</h1>
-            <span className="text-sm bg-green-100 text-green-800 px-3 py-1 rounded-full">Live</span>
-          </div>
-          <p className="text-gray-600">Wed-Tue payroll week planning. Sync live data. Optimize dispatch.</p>
+        <div style={{ background: 'white', borderRadius: '8px', boxShadow: '0 2px 8px rgba(0,0,0,0.1)', padding: '2rem', marginBottom: '1.5rem' }}>
+          <h1 style={{ fontSize: '2rem', fontWeight: 'bold', color: '#1f2937', margin: '0 0 0.5rem 0' }}>
+            ⚡ ACI Weekly AI Dispatch
+          </h1>
+          <p style={{ color: '#6b7280', margin: 0 }}>Plan your entire week on Sunday. Optimize automatically.</p>
         </div>
 
-        {/* Status & Error */}
+        {/* Status Messages */}
         {status && (
-          <div className="mb-6 bg-blue-50 border border-blue-200 rounded-lg p-4 flex gap-3">
-            <Zap className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
-            <p className="text-blue-700">{status}</p>
+          <div style={{ background: '#dbeafe', border: '1px solid #93c5fd', borderRadius: '8px', padding: '1rem', marginBottom: '1.5rem', color: '#1e40af' }}>
+            {status}
           </div>
         )}
 
         {error && (
-          <div className="mb-6 bg-red-50 border border-red-200 rounded-lg p-4 flex gap-3">
-            <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
-            <p className="text-red-700">{error}</p>
+          <div style={{ background: '#fee2e2', border: '1px solid #fca5a5', borderRadius: '8px', padding: '1rem', marginBottom: '1.5rem', color: '#dc2626' }}>
+            ❌ {error}
           </div>
         )}
 
-        {/* Tabs */}
-        <div className="bg-white rounded-lg shadow-lg overflow-hidden">
-          <div className="flex border-b flex-wrap">
+        {/* Main Container */}
+        <div style={{ background: 'white', borderRadius: '8px', boxShadow: '0 2px 8px rgba(0,0,0,0.1)', overflow: 'hidden' }}>
+          {/* Tabs */}
+          <div style={{ display: 'flex', borderBottom: '1px solid #e5e7eb' }}>
             {[
               { id: 'weekly', label: '📊 Weekly Dispatch' },
               { id: 'history', label: '📋 Past Schedules' },
@@ -475,117 +337,84 @@ Output JSON:
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
-                className={`flex-1 py-4 px-4 text-center font-semibold transition-all text-sm md:text-base ${
-                  activeTab === tab.id
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-gray-50 text-gray-700 hover:bg-gray-100'
-                }`}
+                style={{
+                  flex: 1,
+                  padding: '1rem',
+                  border: 'none',
+                  background: activeTab === tab.id ? '#2563eb' : '#f9fafb',
+                  color: activeTab === tab.id ? 'white' : '#4b5563',
+                  fontWeight: '600',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s',
+                }}
               >
                 {tab.label}
               </button>
             ))}
           </div>
 
-          <div className="p-6">
-            {/* TAB: WEEKLY DISPATCH */}
+          {/* Tab Content */}
+          <div style={{ padding: '2rem' }}>
+            {/* Weekly Dispatch Tab */}
             {activeTab === 'weekly' && (
-              <div className="space-y-6">
-                <h2 className="text-xl font-bold flex items-center gap-2">
-                  <Calendar className="w-6 h-6" />
-                  Generate Weekly Schedule
-                </h2>
-
-                <div className="space-y-4">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-sm font-semibold mb-2">Week Start (Wed)</label>
-                      <input
-                        type="date"
-                        value={weeklySchedule.week_start_date}
-                        onChange={(e) => setWeeklySchedule({ ...weeklySchedule, week_start_date: e.target.value })}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-semibold mb-2">Crew Preferences</label>
-                    <textarea
-                      value={weeklySchedule.crew_preferences}
-                      onChange={(e) => setWeeklySchedule({ ...weeklySchedule, crew_preferences: e.target.value })}
-                      placeholder="e.g., Ira leads North, Leslie leads South, Porshua dedicated Beach Island..."
-                      className="w-full h-20 px-3 py-2 border border-gray-300 rounded-lg text-sm"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-semibold mb-2">Vacation/Unavailable Days</label>
-                    <textarea
-                      value={weeklySchedule.vacation_blocks}
-                      onChange={(e) => setWeeklySchedule({ ...weeklySchedule, vacation_blocks: e.target.value })}
-                      placeholder="e.g., Ira off Wed-Thu, Tiara unavailable Monday..."
-                      className="w-full h-16 px-3 py-2 border border-gray-300 rounded-lg text-sm"
-                    />
-                  </div>
-
-                  <button
-                    onClick={() => {
-                      syncHouseCallPro().then(() => generateWeeklyDispatch());
-                    }}
-                    disabled={loading || !settings.housecallProApiKey || !settings.claudeApiKey}
-                    className="w-full bg-blue-600 text-white font-semibold py-3 rounded-lg hover:bg-blue-700 disabled:bg-gray-400 transition flex items-center justify-center gap-2"
-                  >
-                    {loading ? <RefreshCw className="w-5 h-5 animate-spin" /> : <Zap className="w-5 h-5" />}
-                    Generate Weekly Optimized Schedule
-                  </button>
+              <div>
+                <h2 style={{ fontSize: '1.3rem', fontWeight: '600', marginBottom: '1.5rem' }}>Generate Weekly Schedule</h2>
+                
+                <div style={{ marginBottom: '1rem' }}>
+                  <label style={{ display: 'block', fontWeight: '600', marginBottom: '0.5rem' }}>Week Start (Wednesday)</label>
+                  <input
+                    type="date"
+                    value={weeklySchedule.week_start_date}
+                    onChange={(e) => setWeeklySchedule({ ...weeklySchedule, week_start_date: e.target.value })}
+                    style={{ width: '100%', padding: '0.5rem', border: '1px solid #d1d5db', borderRadius: '4px' }}
+                  />
                 </div>
 
-                {dispatchResult && (
-                  <div className="space-y-4">
-                    <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-                      <h3 className="font-bold text-green-800 mb-3">✓ Weekly Schedule Generated</h3>
-                      
-                      {dispatchResult.crew_utilization && (
-                        <div className="bg-white p-3 rounded border border-green-100">
-                          <p className="font-semibold text-gray-800 mb-2">Crew Utilization</p>
-                          {Object.entries(dispatchResult.crew_utilization).map(([crew, data]) => (
-                            <div key={crew} className="flex justify-between text-sm text-gray-700 mb-1">
-                              <span>{crew}: {data.total_hours} hrs / {data.jobs} jobs</span>
-                              <span className={data.utilization > 1 ? 'text-orange-600' : 'text-green-600'}>
-                                {(data.utilization * 100).toFixed(0)}%
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
+                <div style={{ marginBottom: '1rem' }}>
+                  <label style={{ display: 'block', fontWeight: '600', marginBottom: '0.5rem' }}>Crew Preferences</label>
+                  <textarea
+                    value={weeklySchedule.crew_preferences}
+                    onChange={(e) => setWeeklySchedule({ ...weeklySchedule, crew_preferences: e.target.value })}
+                    style={{ width: '100%', height: '80px', padding: '0.5rem', border: '1px solid #d1d5db', borderRadius: '4px', fontFamily: 'sans-serif' }}
+                  />
+                </div>
 
-                      <button
-                        onClick={() => {
-                          const dataStr = JSON.stringify(dispatchResult, null, 2);
-                          const dataBlob = new Blob([dataStr], { type: 'application/json' });
-                          const url = URL.createObjectURL(dataBlob);
-                          const link = document.createElement('a');
-                          link.href = url;
-                          link.download = `weekly_dispatch_${weeklySchedule.week_start_date}.json`;
-                          link.click();
-                        }}
-                        className="mt-3 text-sm text-blue-600 underline"
-                      >
-                        📥 Download JSON
-                      </button>
-                    </div>
+                <button
+                  onClick={() => {
+                    syncHouseCallPro().then(() => generateWeeklyDispatch());
+                  }}
+                  disabled={loading || !settings.housecallProApiKey || !settings.claudeApiKey}
+                  style={{
+                    width: '100%',
+                    padding: '0.75rem',
+                    background: loading || !settings.housecallProApiKey || !settings.claudeApiKey ? '#d1d5db' : '#2563eb',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '4px',
+                    fontWeight: '600',
+                    cursor: loading || !settings.housecallProApiKey || !settings.claudeApiKey ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  {loading ? 'Generating...' : 'Generate Schedule'}
+                </button>
+
+                {dispatchResult && (
+                  <div style={{ marginTop: '2rem', background: '#f0fdf4', border: '1px solid #86efac', borderRadius: '4px', padding: '1rem' }}>
+                    <h3 style={{ color: '#166534', marginBottom: '1rem' }}>✓ Schedule Generated</h3>
+                    <pre style={{ background: 'white', padding: '1rem', borderRadius: '4px', overflow: 'auto', maxHeight: '300px', fontSize: '0.875rem' }}>
+                      {JSON.stringify(dispatchResult, null, 2)}
+                    </pre>
                   </div>
                 )}
               </div>
             )}
 
-            {/* TAB: PAST SCHEDULES */}
+            {/* Past Schedules Tab */}
             {activeTab === 'history' && (
-              <div className="space-y-6">
-                <h2 className="text-xl font-bold">📋 Past Weekly Schedules</h2>
-                
+              <div>
+                <h2 style={{ fontSize: '1.3rem', fontWeight: '600', marginBottom: '1.5rem' }}>Past Schedules</h2>
                 {savedSchedules.length > 0 ? (
-                  <div className="space-y-2">
+                  <div>
                     {savedSchedules.map(week => (
                       <button
                         key={week}
@@ -595,85 +424,90 @@ Output JSON:
                           setWeeklySchedule({ ...weeklySchedule, week_start_date: week });
                           setActiveTab('weekly');
                         }}
-                        className="w-full text-left p-3 bg-gray-50 border border-gray-300 rounded-lg hover:bg-gray-100 transition"
+                        style={{
+                          width: '100%',
+                          textAlign: 'left',
+                          padding: '1rem',
+                          marginBottom: '0.5rem',
+                          background: '#f9fafb',
+                          border: '1px solid #e5e7eb',
+                          borderRadius: '4px',
+                          cursor: 'pointer',
+                        }}
                       >
-                        <p className="font-semibold text-gray-800">Week of {week}</p>
-                        <p className="text-sm text-gray-600">Wed-Tue payroll week</p>
+                        <div style={{ fontWeight: '600' }}>Week of {week}</div>
+                        <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>Wed-Tue payroll week</div>
                       </button>
                     ))}
                   </div>
                 ) : (
-                  <p className="text-gray-600">No schedules saved yet. Generate your first schedule above.</p>
+                  <p style={{ color: '#6b7280' }}>No schedules saved yet.</p>
                 )}
               </div>
             )}
 
-            {/* TAB: SETTINGS */}
+            {/* Settings Tab */}
             {activeTab === 'settings' && (
-              <div className="space-y-6">
-                <h2 className="text-xl font-bold">⚙️ Setup & Configuration</h2>
+              <div>
+                <h2 style={{ fontSize: '1.3rem', fontWeight: '600', marginBottom: '1.5rem' }}>Setup & Configuration</h2>
 
-                <div className="space-y-4">
-                  <div className="border border-gray-300 rounded-lg p-4">
-                    <label className="block text-sm font-semibold mb-2">HouseCall Pro API Key</label>
-                    <input
-                      type="password"
-                      placeholder="hcp_..."
-                      value={settings.housecallProApiKey}
-                      onChange={(e) => {
-                        setSettings({ ...settings, housecallProApiKey: e.target.value });
-                        localStorage.setItem('hcp_key', e.target.value);
-                      }}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm mb-2"
-                    />
-                    <p className="text-xs text-gray-600">Get from HouseCall Pro Settings → Integrations → API</p>
-                  </div>
+                <div style={{ marginBottom: '1.5rem', border: '1px solid #d1d5db', borderRadius: '4px', padding: '1rem' }}>
+                  <label style={{ display: 'block', fontWeight: '600', marginBottom: '0.5rem' }}>HouseCall Pro API Key</label>
+                  <input
+                    type="password"
+                    placeholder="hcp_..."
+                    value={settings.housecallProApiKey}
+                    onChange={(e) => {
+                      setSettings({ ...settings, housecallProApiKey: e.target.value });
+                      localStorage.setItem('hcp_key', e.target.value);
+                    }}
+                    style={{ width: '100%', padding: '0.5rem', border: '1px solid #d1d5db', borderRadius: '4px' }}
+                  />
+                  <p style={{ fontSize: '0.875rem', color: '#6b7280', marginTop: '0.5rem' }}>Get from HouseCall Pro Settings → Integrations → API</p>
+                </div>
 
-                  <div className="border border-blue-300 rounded-lg p-4 bg-blue-50">
-                    <label className="block text-sm font-semibold mb-2">Claude API Key</label>
-                    <input
-                      type="password"
-                      placeholder="sk-ant-..."
-                      value={settings.claudeApiKey}
-                      onChange={(e) => {
-                        setSettings({ ...settings, claudeApiKey: e.target.value });
-                        localStorage.setItem('claude_key', e.target.value);
-                      }}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm mb-2"
-                    />
-                    <p className="text-xs text-gray-600">Get from <a href="https://console.anthropic.com/api/keys" target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">Anthropic Console</a></p>
-                  </div>
+                <div style={{ marginBottom: '1.5rem', border: '1px solid #93c5fd', background: '#eff6ff', borderRadius: '4px', padding: '1rem' }}>
+                  <label style={{ display: 'block', fontWeight: '600', marginBottom: '0.5rem' }}>Claude API Key</label>
+                  <input
+                    type="password"
+                    placeholder="sk-ant-..."
+                    value={settings.claudeApiKey}
+                    onChange={(e) => {
+                      setSettings({ ...settings, claudeApiKey: e.target.value });
+                      localStorage.setItem('claude_key', e.target.value);
+                    }}
+                    style={{ width: '100%', padding: '0.5rem', border: '1px solid #d1d5db', borderRadius: '4px' }}
+                  />
+                  <p style={{ fontSize: '0.875rem', color: '#6b7280', marginTop: '0.5rem' }}>Get from <a href="https://console.anthropic.com/api/keys" target="_blank" rel="noopener noreferrer" style={{ color: '#2563eb', textDecoration: 'underline' }}>Anthropic Console</a></p>
+                </div>
 
-                  <div className="border border-purple-300 rounded-lg p-4 bg-purple-50">
-                    <label className="block text-sm font-semibold mb-2">Historical Job Data (CSV)</label>
-                    <input
-                      type="file"
-                      ref={csvFileRef}
-                      onChange={handleCsvUpload}
-                      accept=".csv"
-                      className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-purple-600 file:text-white"
-                    />
-                    {settings.historicalCsvUploaded && (
-                      <p className="text-xs text-green-600 mt-2">✓ Historical data loaded</p>
-                    )}
-                  </div>
-
-                  {settings.lastSync && (
-                    <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-                      <p className="text-sm text-green-800">
-                        ✓ Last synced: {new Date(settings.lastSync).toLocaleString()}
-                      </p>
-                    </div>
+                <div style={{ marginBottom: '1.5rem', border: '1px solid #d1d5db', borderRadius: '4px', padding: '1rem' }}>
+                  <label style={{ display: 'block', fontWeight: '600', marginBottom: '0.5rem' }}>Historical Job Data (CSV)</label>
+                  <input
+                    type="file"
+                    ref={csvFileRef}
+                    onChange={handleCsvUpload}
+                    accept=".csv"
+                    style={{ width: '100%' }}
+                  />
+                  {settings.historicalCsvUploaded && (
+                    <p style={{ fontSize: '0.875rem', color: '#15803d', marginTop: '0.5rem' }}>✓ Historical data loaded</p>
                   )}
                 </div>
+
+                {settings.lastSync && (
+                  <div style={{ background: '#f0fdf4', border: '1px solid #86efac', borderRadius: '4px', padding: '1rem' }}>
+                    <p style={{ color: '#166534', margin: 0 }}>✓ Last synced: {new Date(settings.lastSync).toLocaleString()}</p>
+                  </div>
+                )}
               </div>
             )}
           </div>
         </div>
 
         {/* Footer */}
-        <div className="mt-6 text-center text-sm text-gray-600">
-          <p>🚀 ACI Weekly AI Dispatch - Plan your entire week on Sunday. Optimize automatically.</p>
+        <div style={{ textAlign: 'center', marginTop: '2rem', color: '#6b7280', fontSize: '0.875rem' }}>
+          <p>🚀 ACI Weekly AI Dispatch - Plan, optimize, execute.</p>
         </div>
       </div>
     </div>
