@@ -110,14 +110,28 @@ const ACIDispatchApp = () => {
         })
       });
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(`Proxy error: ${response.status} - ${JSON.stringify(errorData)}`);
+      const responseText = await response.text();
+      
+      // Try to parse as JSON
+      let data;
+      try {
+        data = JSON.parse(responseText);
+      } catch (e) {
+        addDebugLog(`${endpoint} proxy returned non-JSON`, {
+          status: response.status,
+          responsePreview: responseText.substring(0, 200)
+        });
+        throw new Error(`${endpoint} proxy returned non-JSON (status ${response.status})`);
       }
 
-      const data = await response.json();
-      if (!data.success) {
-        throw new Error(`API returned: ${JSON.stringify(data)}`);
+      if (!response.ok) {
+        addDebugLog(`${endpoint} API error`, data);
+        throw new Error(`${endpoint} API error: ${JSON.stringify(data)}`);
+      }
+
+      if (data.error) {
+        addDebugLog(`${endpoint} error response`, data);
+        throw new Error(`${endpoint}: ${data.error}`);
       }
 
       return data.data;
