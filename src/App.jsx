@@ -471,38 +471,8 @@ TASK: Generate optimal weekly dispatch schedule with simple JSON output showing 
                     }}
                     style={{ width: '100%', padding: '0.5rem', border: '1px solid #d1d5db', borderRadius: '4px' }}
                   />
-                <button
-                  onClick={async () => {
-                    setSyncProgress('🧪 Testing HouseCall Pro API...');
-                    try {
-                      const response = await fetch('/api/test-hcp', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ apiKey: settings.housecallProApiKey })
-                      });
-                      const result = await response.json();
-                      setDebugLog(prev => [...prev, `[TEST] ${JSON.stringify(result, null, 2)}`]);
-                      setSyncProgress('✓ Test complete - check debug log');
-                    } catch (err) {
-                      addDebugLog('Test error', err.message);
-                      setSyncProgress('❌ Test failed');
-                    }
-                  }}
-                  style={{
-                    width: '100%',
-                    padding: '0.5rem',
-                    marginTop: '0.5rem',
-                    background: '#f59e0b',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: '4px',
-                    cursor: 'pointer',
-                    fontSize: '0.875rem',
-                    fontWeight: '600',
-                  }}
-                >
-                  🧪 Test API Key
-                </button>
+                  <p style={{ fontSize: '0.875rem', color: '#6b7280', marginTop: '0.5rem' }}>Get from HouseCall Pro Settings → Integrations → API</p>
+                </div>
 
                 <div style={{ marginBottom: '1.5rem', border: '1px solid #93c5fd', background: '#eff6ff', borderRadius: '4px', padding: '1rem' }}>
                   <label style={{ display: 'block', fontWeight: '600', marginBottom: '0.5rem' }}>Claude API Key</label>
