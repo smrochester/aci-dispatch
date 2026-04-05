@@ -285,28 +285,30 @@ ${weeklySchedule.vacation_blocks || 'None'}
 TASK: Generate optimal weekly dispatch schedule with simple JSON output showing crew assignments, start/end times, and reasoning.`;
 
     try {
-      setSyncProgress('📤 Sending data to Claude...');
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
+      setSyncProgress('📤 Sending data to Claude via secure proxy...');
+      const response = await fetch('/api/claude-dispatch', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-api-key': settings.claudeApiKey,
         },
         body: JSON.stringify({
-          model: 'claude-opus-4-20250514',
-          max_tokens: 2000,
-          messages: [{ role: 'user', content: dispatchPrompt }]
+          apiKey: settings.claudeApiKey,
+          prompt: dispatchPrompt
         })
       });
 
+      const data = await response.json();
+
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error?.message || 'Claude API error');
+        throw new Error(data.details?.error?.message || data.error || 'Claude API error');
+      }
+
+      if (!data.success) {
+        throw new Error('Claude API returned error: ' + JSON.stringify(data));
       }
 
       setSyncProgress('🧠 Claude is reasoning about your operation...');
-      const data = await response.json();
-      const responseText = data.content[0].text;
+      const responseText = data.data.content[0].text;
       const jsonMatch = responseText.match(/\{[\s\S]*\}/);
       const result = jsonMatch ? JSON.parse(jsonMatch[0]) : { raw_response: responseText };
 
@@ -317,7 +319,7 @@ TASK: Generate optimal weekly dispatch schedule with simple JSON output showing 
     } catch (err) {
       setError(`Claude dispatch failed: ${err.message}`);
       setSyncProgress('❌ Schedule generation failed');
-      addDebugLog('Claude error', err);
+      addDebugLog('Claude error', err.message);
     } finally {
       setLoading(false);
     }
