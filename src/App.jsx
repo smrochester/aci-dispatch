@@ -409,8 +409,6 @@ Output JSON with DETAILED crew assignments and reasoning`;
       const result = jsonMatch ? JSON.parse(jsonMatch[0]) : { raw_response: responseText };
 
       setDispatchResult(result);
-      await savePastSchedule(weeklySchedule.week_start_date, result);
-      await loadPastSchedules();
 
       setSyncProgress('✓ Optimal schedule generated');
       setStatus('✓ Schedule optimized with complete CleanOps intelligence.');
