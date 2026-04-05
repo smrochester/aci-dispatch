@@ -169,7 +169,8 @@ const ACIDispatchApp = () => {
         page_size: 200
       });
       addDebugLog('Jobs data received', {
-        jobCount: jobsData.data?.length || 0
+        jobCount: jobsData.length || 0,
+        firstJob: jobsData[0] || 'No jobs'
       });
 
       setSyncProgress(`✓ Found ${jobsData.data?.length || 0} jobs. Fetching crew...`);
@@ -189,7 +190,7 @@ const ACIDispatchApp = () => {
       // Customer data comes from the jobs response
       const customersData = { data: [] };
 
-      const transformedJobs = (jobsData.data || [])
+      const transformedJobs = (jobsData || [])
         .filter(job => {
           const jobDate = new Date(job.scheduled_start_time);
           return jobDate >= startDate && jobDate <= endDate;
@@ -209,7 +210,7 @@ const ACIDispatchApp = () => {
         dateRange: `${startDate.toLocaleDateString()} to ${endDate.toLocaleDateString()}`
       });
 
-      const transformedCrew = (crewData.data || []).map(member => ({
+      const transformedCrew = (crewData || []).map(member => ({
         id: member.id,
         name: member.name,
         status: member.status,
