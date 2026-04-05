@@ -238,7 +238,7 @@ const ACIDispatchApp = () => {
       setSyncProgress(`✓ HouseCall Pro synced: ${transformedJobs.length} jobs, ${transformedCrew.length} crew`);
       addDebugLog('HouseCall Pro sync successful');
       setError(null); // Clear any previous errors
-      return true;
+      return { success: true, jobs: transformedJobs, crew: transformedCrew };
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
       setError(`HouseCall Pro sync failed: ${errorMsg}`);
@@ -331,16 +331,22 @@ TASK: Generate optimal weekly dispatch schedule with simple JSON output showing 
     setDebugLog([]);
     
     await syncLovableData();
-    await syncHouseCallPro();
+    const hcpResult = await syncHouseCallPro();
     
-    // Wait a moment for state to update
-    setTimeout(() => {
-      if (liveData.weeklyJobs.length === 0) {
-        setError('No jobs for this week. Sync HouseCall Pro first.');
-      } else {
-        generateWeeklyDispatch();
-      }
-    }, 500);
+    // Use returned data immediately without waiting for state
+    if (hcpResult.success && hcpResult.jobs && hcpResult.jobs.length > 0) {
+      // Store in state for the dispatch function
+      setLiveData({
+        weeklyJobs: hcpResult.jobs,
+        availableCrew: hcpResult.crew,
+        properties: []
+      });
+      
+      // Generate immediately with the data
+      setTimeout(() => generateWeeklyDispatch(), 100);
+    } else {
+      setError('No jobs synced from HouseCall Pro');
+    }
   };
 
   return (
