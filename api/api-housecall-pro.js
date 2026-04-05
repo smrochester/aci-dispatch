@@ -31,7 +31,7 @@ export default async function handler(req, res) {
   try {
     // Build query string from params
     const queryParams = new URLSearchParams(params);
-    const fullUrl = `https://api.housecallpro.com/v2/${endpoint}${queryParams.toString() ? '?' + queryParams.toString() : ''}`;
+    const fullUrl = `https://api.housecallpro.com/${endpoint}${queryParams.toString() ? '?' + queryParams.toString() : ''}`;
 
     console.log(`[HCP Proxy] Calling: ${fullUrl}`);
     console.log(`[HCP Proxy] API Key format: ${apiKey.substring(0, 10)}...`);
