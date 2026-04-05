@@ -237,6 +237,7 @@ const ACIDispatchApp = () => {
 
       setSyncProgress(`✓ HouseCall Pro synced: ${transformedJobs.length} jobs, ${transformedCrew.length} crew`);
       addDebugLog('HouseCall Pro sync successful');
+      setError(null); // Clear any previous errors
       return true;
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
@@ -330,12 +331,14 @@ TASK: Generate optimal weekly dispatch schedule with simple JSON output showing 
     const lovableSuccess = await syncLovableData();
     const hcpSuccess = await syncHouseCallPro();
     
-    if (lovableSuccess && hcpSuccess) {
-      await generateWeeklyDispatch();
-    } else if (hcpSuccess) {
-      setSyncProgress('⚠️ Proceeding without Lovable data...');
-      await generateWeeklyDispatch();
-    }
+    // Wait a moment for state to update
+    setTimeout(() => {
+      if (liveData.weeklyJobs.length === 0) {
+        setError('No jobs for this week. Sync HouseCall Pro first.');
+      } else {
+        generateWeeklyDispatch();
+      }
+    }, 500);
   };
 
   return (
