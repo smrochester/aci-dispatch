@@ -309,8 +309,22 @@ TASK: Generate optimal weekly dispatch schedule with simple JSON output showing 
 
       setSyncProgress('🧠 Claude is reasoning about your operation...');
       const responseText = data.data.content[0].text;
-      const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-      const result = jsonMatch ? JSON.parse(jsonMatch[0]) : { raw_response: responseText };
+      
+      let result;
+      try {
+        result = JSON.parse(responseText);
+      } catch (parseErr) {
+        const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          try {
+            result = JSON.parse(jsonMatch[0]);
+          } catch (e2) {
+            result = { raw_response: responseText.substring(0, 3000), parse_error: e2.message };
+          }
+        } else {
+          result = { raw_response: responseText.substring(0, 3000) };
+        }
+      }
 
       setDispatchResult(result);
 
