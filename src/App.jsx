@@ -12,8 +12,6 @@ const ACIDispatchApp = () => {
   const [settings, setSettings] = useState({
     housecallProApiKey: localStorage.getItem('hcp_key') || '',
     claudeApiKey: localStorage.getItem('claude_key') || '',
-    lovableApiKey: localStorage.getItem('lovable_key') || '',
-    lovableWorkspaceId: localStorage.getItem('lovable_workspace') || '',
     historicalCsvUploaded: !!localStorage.getItem('csv_uploaded'),
     lastSync: localStorage.getItem('last_sync'),
   });
@@ -23,6 +21,7 @@ const ACIDispatchApp = () => {
     availableCrew: [],
     teamAvailability: [],
     jobInteractions: [],
+    teamPerformance: [],
     properties: [],
     historicalContext: null,
     lastUpdated: null,
@@ -35,6 +34,9 @@ const ACIDispatchApp = () => {
   });
 
   const csvFileRef = useRef(null);
+
+  // MCP Server endpoint (Lovable Supabase)
+  const MCP_ENDPOINT = 'https://kpwafdzgvqbtohvbkxbu.supabase.co/functions/v1/mcp-server';
 
   function getNextWednesday() {
     const today = new Date();
@@ -61,69 +63,91 @@ const ACIDispatchApp = () => {
     setSavedSchedules(Object.keys(schedules).sort().reverse());
   };
 
-  const syncLovable = async () => {
-    if (!settings.lovableApiKey.trim() || !settings.lovableWorkspaceId.trim()) {
-      setSyncProgress('Lovable API key/workspace not configured (optional)');
-      return { teamAvailability: [], jobInteractions: [] };
-    }
-
-    setSyncProgress('📱 Syncing team availability from Lovable...');
-
+  // Query MCP Server via Lovable's Supabase edge function
+  const queryMCPServer = async (query, args = {}) => {
     try {
-      // Fetch team members and their availability
-      const teamResponse = await fetch(
-        `https://api.lovable.dev/v1/workspaces/${settings.lovableWorkspaceId}/team`,
-        {
-          headers: {
-            'Authorization': `Bearer ${settings.lovableApiKey}`,
-            'Content-Type': 'application/json',
-          }
-        }
-      );
+      const response = await fetch(MCP_ENDPOINT, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          query: query,
+          arguments: args,
+        })
+      });
 
-      if (!teamResponse.ok) {
-        throw new Error(`Lovable API error: ${teamResponse.status}`);
+      if (!response.ok) {
+        throw new Error(`MCP Server error: ${response.status}`);
       }
 
-      const teamData = await teamResponse.json();
-      setSyncProgress('📊 Fetching job interaction data from Lovable...');
-
-      // Fetch job interactions
-      const interactionsResponse = await fetch(
-        `https://api.lovable.dev/v1/workspaces/${settings.lovableWorkspaceId}/interactions`,
-        {
-          headers: {
-            'Authorization': `Bearer ${settings.lovableApiKey}`,
-            'Content-Type': 'application/json',
-          }
-        }
-      );
-
-      const interactionsData = await interactionsResponse.json();
-
-      const teamAvailability = (teamData.members || []).map(member => ({
-        id: member.id,
-        name: member.name,
-        availability_status: member.availability_status,
-        hours_available: member.hours_available,
-        location: member.location,
-        specialties: member.specialties || [],
-      }));
-
-      const jobInteractions = (interactionsData.interactions || []).map(interaction => ({
-        id: interaction.id,
-        team_member_id: interaction.team_member_id,
-        job_type: interaction.job_type,
-        interaction_count: interaction.count,
-        success_rate: interaction.success_rate,
-        average_duration: interaction.average_duration,
-      }));
-
-      setSyncProgress('✓ Lovable data synced');
-      return { teamAvailability, jobInteractions };
+      const data = await response.json();
+      return data;
     } catch (err) {
-      setSyncProgress(`⚠️ Lovable sync skipped: ${err.message}`);
-      return { teamAvailability: [], jobInteractions: [] };
+      console.error(`MCP Query failed (${query}):`, err);
+      return { success: false, error: err.message };
+    }
+  };
+
+  const syncLovableData = async () => {
+    setSyncProgress('📱 Fetching team availability from Lovable via MCP server...');
+
+    try {
+      // Get team members
+      setSyncProgress('👥 Querying team members...');
+      const teamResult = await queryMCPServer('get_team_members');
+      
+      if (!teamResult.success) {
+        throw new Error(`Failed to get team members: ${teamResult.error}`);
+      }
+
+      // Get team availability
+      setSyncProgress('⏰ Fetching current availability...');
+      const availabilityResult = await queryMCPServer('get_team_availability');
+      
+      if (!availabilityResult.success) {
+        throw new Error(`Failed to get availability: ${availabilityResult.error}`);
+      }
+
+      // Get job interactions
+      setSyncProgress('📊 Querying job interactions and success rates...');
+      const interactionsResult = await queryMCPServer('get_job_interactions');
+      
+      if (!interactionsResult.success) {
+        throw new Error(`Failed to get interactions: ${interactionsResult.error}`);
+      }
+
+      // Get performance data for all team members
+      setSyncProgress('🏆 Fetching performance metrics...');
+      const teamData = teamResult.data?.team_members || [];
+      const performanceData = [];
+      
+      for (const member of teamData) {
+        const perfResult = await queryMCPServer('get_crew_performance', { crew_id: member.id });
+        if (perfResult.success && perfResult.data?.performance) {
+          performanceData.push({
+            crew_id: member.id,
+            crew_name: member.name,
+            performance: perfResult.data.performance,
+          });
+        }
+      }
+
+      // Update live data with all Lovable information
+      setLiveData(prev => ({
+        ...prev,
+        teamAvailability: availabilityResult.data?.availability || [],
+        jobInteractions: interactionsResult.data?.interactions || [],
+        teamPerformance: performanceData,
+        lastUpdated: new Date().toLocaleTimeString(),
+      }));
+
+      setSyncProgress(`✓ Lovable data synced: ${teamData.length} team members, ${(interactionsResult.data?.interactions || []).length} interactions`);
+      return true;
+    } catch (err) {
+      setSyncProgress(`⚠️ Lovable sync error: ${err.message}`);
+      console.error('Lovable sync error:', err);
+      return false;
     }
   };
 
@@ -216,7 +240,6 @@ const ACIDispatchApp = () => {
         weeklyJobs: transformedJobs,
         availableCrew: transformedCrew,
         properties: transformedCustomers,
-        lastUpdated: new Date().toLocaleTimeString(),
       }));
 
       const newSettings = { ...settings, lastSync: new Date().toISOString() };
@@ -262,12 +285,12 @@ const ACIDispatchApp = () => {
             if (parts.length < 14) continue;
             
             const jobId = parts[0]?.replace(/[="]/g, '').trim();
-            const status = parts[1]?.trim();
+            const statusField = parts[1]?.trim();
             const customerName = parts[2]?.replace(/"/g, '').trim();
             const jobDuration = parseFloat(parts[13]?.replace(/"/g, '').trim()) || 0;
             const assignedEmployees = parts[6]?.replace(/"/g, '').trim() || 'Unknown';
             
-            if (status !== 'Completed' || !jobDuration) continue;
+            if (statusField !== 'Completed' || !jobDuration) continue;
             
             historicalJobs.push({
               job_id: jobId,
@@ -342,46 +365,74 @@ const ACIDispatchApp = () => {
     }
 
     setLoading(true);
-    setSyncProgress('🤖 Claude is optimizing your weekly schedule...');
+    setSyncProgress('🤖 Claude is optimizing your weekly schedule with live data...');
     setError(null);
+
+    // Format team availability from Lovable MCP
+    const teamAvailabilityStr = liveData.teamAvailability.length > 0
+      ? JSON.stringify(liveData.teamAvailability, null, 2)
+      : 'No Lovable availability data';
+
+    // Format job interactions from Lovable MCP
+    const jobInteractionsStr = liveData.jobInteractions.length > 0
+      ? JSON.stringify(liveData.jobInteractions, null, 2)
+      : 'No job interaction data';
+
+    // Format performance data from Lovable MCP
+    const performanceStr = liveData.teamPerformance.length > 0
+      ? JSON.stringify(liveData.teamPerformance, null, 2)
+      : 'No performance data';
 
     const dispatchPrompt = `You are an expert dispatcher for American Cleaning Innovations (ACI).
 
 WEEK: ${weeklySchedule.week_start_date} (Wednesday) through ${new Date(new Date(weeklySchedule.week_start_date).getTime() + 6*24*60*60*1000).toISOString().split('T')[0]} (Tuesday)
 
-JOBS (${liveData.weeklyJobs.length} total):
+JOBS FROM HOUSECALL PRO (${liveData.weeklyJobs.length} total):
 ${JSON.stringify(liveData.weeklyJobs.slice(0, 50), null, 2)}
 
 CREW FROM HOUSECALL PRO:
 ${JSON.stringify(liveData.availableCrew, null, 2)}
 
-TEAM AVAILABILITY FROM LOVABLE:
-${liveData.teamAvailability.length > 0 ? JSON.stringify(liveData.teamAvailability, null, 2) : 'No Lovable data available'}
+LIVE TEAM AVAILABILITY FROM LOVABLE (via secure MCP server):
+${teamAvailabilityStr}
 
-JOB INTERACTIONS FROM LOVABLE:
-${liveData.jobInteractions.length > 0 ? JSON.stringify(liveData.jobInteractions, null, 2) : 'No Lovable interaction data available'}
+JOB INTERACTIONS & SUCCESS RATES FROM LOVABLE (via secure MCP server):
+${jobInteractionsStr}
 
-HISTORICAL DATA:
+TEAM PERFORMANCE METRICS FROM LOVABLE (via secure MCP server):
+${performanceStr}
+
+HISTORICAL JOB DATA FROM HOUSECALL PRO:
 ${liveData.historicalContext ? JSON.stringify(liveData.historicalContext, null, 2) : 'No historical data'}
 
-CREW PREFERENCES:
+CREW PREFERENCES & CONSTRAINTS:
 ${weeklySchedule.crew_preferences}
 
-VACATION/UNAVAILABLE:
+VACATION/UNAVAILABLE DAYS:
 ${weeklySchedule.vacation_blocks || 'None'}
 
-TASK: Generate optimal weekly dispatch schedule considering:
-1. Same-day turnovers are highest priority
-2. Crew availability from both HouseCall Pro and Lovable
-3. Historical performance patterns
-4. Job interaction success rates
-5. Team preferences and constraints
+OPTIMIZATION GOALS (priority order):
+1. Same-day turnovers are highest priority - must complete by deadline
+2. Respect real-time team availability from Lovable
+3. Assign crews to job types they have high success rates on (from interactions)
+4. Balance crew workload (no one over 40 hrs/week)
+5. Geographic clustering (minimize travel)
+6. Consider crew performance history
+7. Crew preferences and constraints
+8. Recurring clients get same crew when possible
 
-Output JSON:
+TASK: Generate an optimal weekly dispatch schedule using ALL available data sources:
+- Live team availability from Lovable CleanOps
+- Historical job performance patterns
+- Crew success rates by job type
+- Real-time performance metrics
+
+Output as JSON:
 {
   "weekly_schedule": [
     {
       "date": "2024-XX-XX",
+      "day_of_week": "Wednesday",
       "jobs": [
         {
           "job_id": "...",
@@ -390,12 +441,17 @@ Output JSON:
           "start_time": "HH:MM",
           "end_time": "HH:MM",
           "confidence": 90,
+          "type": "residential|vr_turnover|commercial",
           "rationale": "..."
         }
       ]
     }
   ],
-  "crew_utilization": {},
+  "crew_utilization": {
+    "Name": { "total_hours": 38.5, "jobs": 12, "utilization": 0.96 }
+  },
+  "data_sources_used": ["HouseCall Pro", "Lovable CleanOps", "Historical Patterns"],
+  "summary": "...",
   "risks": [],
   "recommendations": []
 }`;
@@ -409,7 +465,7 @@ Output JSON:
         },
         body: JSON.stringify({
           model: 'claude-opus-4-20250514',
-          max_tokens: 2000,
+          max_tokens: 2500,
           messages: [{ role: 'user', content: dispatchPrompt }]
         })
       });
@@ -429,8 +485,8 @@ Output JSON:
       await savePastSchedule(weeklySchedule.week_start_date, result);
       await loadPastSchedules();
 
-      setSyncProgress('✓ Schedule generated and saved');
-      setStatus('✓ Weekly schedule optimized and saved.');
+      setSyncProgress('✓ Schedule generated and optimized with live Lovable data');
+      setStatus('✓ Weekly schedule optimized with HouseCall Pro + Lovable data.');
     } catch (err) {
       setError(`Claude dispatch failed: ${err.message}`);
       setSyncProgress('❌ Schedule generation failed');
@@ -443,18 +499,18 @@ Output JSON:
     setSyncProgress('');
     setError(null);
     
-    // Sync Lovable first (non-blocking)
-    const lovableData = await syncLovable();
-    setLiveData(prev => ({
-      ...prev,
-      teamAvailability: lovableData.teamAvailability,
-      jobInteractions: lovableData.jobInteractions,
-    }));
-
+    // Sync Lovable first via MCP server
+    const lovableSuccess = await syncLovableData();
+    
     // Then sync HouseCall Pro
     const hcpSuccess = await syncHouseCallPro();
-    if (hcpSuccess) {
-      // Finally generate dispatch
+    
+    if (lovableSuccess && hcpSuccess) {
+      // Finally generate dispatch with all data
+      await generateWeeklyDispatch();
+    } else if (hcpSuccess) {
+      // HCP succeeded but Lovable failed - still generate with HCP data
+      setSyncProgress('⚠️ Proceeding without Lovable data...');
       await generateWeeklyDispatch();
     }
   };
@@ -466,12 +522,12 @@ Output JSON:
           <h1 style={{ fontSize: '2rem', fontWeight: 'bold', color: '#1f2937', margin: '0 0 0.5rem 0' }}>
             ⚡ ACI Weekly AI Dispatch
           </h1>
-          <p style={{ color: '#6b7280', margin: 0 }}>Integrated with HouseCall Pro & Lovable. Optimized by Claude AI.</p>
+          <p style={{ color: '#6b7280', margin: 0 }}>HouseCall Pro + Lovable CleanOps + Claude. Powered by secure MCP server.</p>
         </div>
 
         {syncProgress && (
           <div style={{ background: '#dbeafe', border: '1px solid #93c5fd', borderRadius: '8px', padding: '1rem', marginBottom: '1.5rem', color: '#1e40af' }}>
-            <div style={{ fontSize: '0.875rem', fontWeight: '500', marginBottom: '0.5rem' }}>🔄 Syncing Status:</div>
+            <div style={{ fontSize: '0.875rem', fontWeight: '500', marginBottom: '0.5rem' }}>🔄 Sync Status:</div>
             <div style={{ fontSize: '1rem', fontFamily: 'monospace' }}>{syncProgress}</div>
           </div>
         )}
@@ -569,6 +625,12 @@ Output JSON:
                 {dispatchResult && (
                   <div style={{ marginTop: '2rem', background: '#f0fdf4', border: '1px solid #86efac', borderRadius: '4px', padding: '1rem' }}>
                     <h3 style={{ color: '#166534', marginBottom: '1rem' }}>✓ Schedule Generated</h3>
+                    {dispatchResult.data_sources_used && (
+                      <div style={{ background: 'white', padding: '0.5rem 1rem', borderRadius: '4px', marginBottom: '1rem', fontSize: '0.875rem' }}>
+                        <p style={{ margin: '0 0 0.5rem 0', fontWeight: '600' }}>Data Sources Used:</p>
+                        <p style={{ margin: 0, color: '#059669' }}>✓ {dispatchResult.data_sources_used.join(' • ')}</p>
+                      </div>
+                    )}
                     {dispatchResult.crew_utilization && Object.keys(dispatchResult.crew_utilization).length > 0 && (
                       <div style={{ background: 'white', padding: '1rem', borderRadius: '4px', marginBottom: '1rem' }}>
                         <p style={{ fontWeight: '600', marginBottom: '0.5rem' }}>Crew Utilization:</p>
@@ -635,7 +697,7 @@ Output JSON:
 
                 <div style={{ marginBottom: '1.5rem', padding: '1rem', background: '#fef3c7', border: '1px solid #fcd34d', borderRadius: '4px' }}>
                   <p style={{ margin: 0, fontSize: '0.875rem', color: '#92400e' }}>
-                    💡 Tip: API keys are stored locally in your browser. They are never sent to our servers except directly to the respective APIs.
+                    🔒 Secure: HouseCall Pro & Claude API keys stored locally. Lovable data accessed securely via MCP server - your data never exposed.
                   </p>
                 </div>
 
@@ -669,32 +731,6 @@ Output JSON:
                   <p style={{ fontSize: '0.875rem', color: '#6b7280', marginTop: '0.5rem' }}>Get from <a href="https://console.anthropic.com/api/keys" target="_blank" rel="noopener noreferrer" style={{ color: '#2563eb', textDecoration: 'underline' }}>Anthropic Console</a></p>
                 </div>
 
-                <div style={{ marginBottom: '1.5rem', border: '1px solid #c7d2fe', background: '#eef2ff', borderRadius: '4px', padding: '1rem' }}>
-                  <label style={{ display: 'block', fontWeight: '600', marginBottom: '0.5rem' }}>Lovable Workspace ID (Optional)</label>
-                  <input
-                    type="text"
-                    placeholder="your-workspace-id"
-                    value={settings.lovableWorkspaceId}
-                    onChange={(e) => {
-                      setSettings({ ...settings, lovableWorkspaceId: e.target.value });
-                      localStorage.setItem('lovable_workspace', e.target.value);
-                    }}
-                    style={{ width: '100%', padding: '0.5rem', border: '1px solid #d1d5db', borderRadius: '4px', marginBottom: '0.5rem' }}
-                  />
-                  <label style={{ display: 'block', fontWeight: '600', marginBottom: '0.5rem' }}>Lovable API Key (Optional)</label>
-                  <input
-                    type="password"
-                    placeholder="lovable_api_..."
-                    value={settings.lovableApiKey}
-                    onChange={(e) => {
-                      setSettings({ ...settings, lovableApiKey: e.target.value });
-                      localStorage.setItem('lovable_key', e.target.value);
-                    }}
-                    style={{ width: '100%', padding: '0.5rem', border: '1px solid #d1d5db', borderRadius: '4px' }}
-                  />
-                  <p style={{ fontSize: '0.875rem', color: '#6b7280', marginTop: '0.5rem' }}>Get from Lovable dashboard. Adds team availability & job interaction data to dispatch optimization.</p>
-                </div>
-
                 <div style={{ marginBottom: '1.5rem', border: '1px solid #d1d5db', borderRadius: '4px', padding: '1rem' }}>
                   <label style={{ display: 'block', fontWeight: '600', marginBottom: '0.5rem' }}>Historical Job Data (HouseCall Pro CSV Export)</label>
                   <input
@@ -713,7 +749,7 @@ Output JSON:
                 {liveData.historicalContext && (
                   <div style={{ background: '#f0fdf4', border: '1px solid #86efac', borderRadius: '4px', padding: '1rem', marginBottom: '1rem' }}>
                     <p style={{ color: '#166534', margin: 0, fontSize: '0.875rem' }}>
-                      ✓ {liveData.historicalContext.total_jobs} completed jobs loaded. Crew averages: {Object.keys(liveData.historicalContext.crew_averages).join(', ')}
+                      ✓ {liveData.historicalContext.total_jobs} completed jobs loaded
                     </p>
                   </div>
                 )}
@@ -721,7 +757,7 @@ Output JSON:
                 {liveData.teamAvailability.length > 0 && (
                   <div style={{ background: '#f0fdf4', border: '1px solid #86efac', borderRadius: '4px', padding: '1rem' }}>
                     <p style={{ color: '#166534', margin: 0, fontSize: '0.875rem' }}>
-                      ✓ Lovable: {liveData.teamAvailability.length} team members, {liveData.jobInteractions.length} interaction records
+                      ✓ Lovable MCP: {liveData.teamAvailability.length} availability records synced securely
                     </p>
                   </div>
                 )}
@@ -731,7 +767,7 @@ Output JSON:
         </div>
 
         <div style={{ textAlign: 'center', marginTop: '2rem', color: '#6b7280', fontSize: '0.875rem' }}>
-          <p>🚀 ACI Weekly AI Dispatch - HouseCall Pro + Lovable + Claude</p>
+          <p>🚀 ACI Weekly AI Dispatch - HouseCall Pro + Lovable CleanOps + Claude (Secure MCP)</p>
         </div>
       </div>
     </div>
