@@ -166,54 +166,57 @@ const ACIDispatchApp = () => {
 
       const jobsData = await callHouseCallProProxy('jobs', {
         page: 1,
-        page_size: 200
+        page_size: 100,
+        scheduled_start_min: startDate.toISOString().split('T')[0],
+        scheduled_start_max: endDate.toISOString().split('T')[0]
       });
       addDebugLog('Jobs data received', {
-        jobCount: jobsData.length || 0,
-        firstJob: jobsData[0] || 'No jobs'
+        jobCount: jobsData.jobs?.length || 0,
+        totalPages: jobsData.total_pages || 0
       });
 
-      setSyncProgress(`✓ Found ${jobsData.data?.length || 0} jobs. Fetching crew...`);
+      setSyncProgress(`✓ Found ${jobsData.jobs?.length || 0} jobs. Fetching crew...`);
 
       setSyncProgress('👥 Fetching team members...');
       const crewData = await callHouseCallProProxy('employees', {
         page: 1,
-        page_size: 200
+        page_size: 100
       });
       addDebugLog('Crew data received', {
-        crewCount: crewData.data?.length || 0
+        crewCount: crewData.employees?.length || 0
       });
 
-      setSyncProgress(`✓ Found ${crewData.data?.length || 0} crew.`);
+      setSyncProgress(`✓ Found ${crewData.employees?.length || 0} crew.`);
 
       // Note: HouseCall Pro doesn't have a direct /customers endpoint
       // Customer data comes from the jobs response
       const customersData = { data: [] };
 
-      const transformedJobs = (jobsData || [])
-        .filter(job => {
-          const jobDate = new Date(job.scheduled_start_time);
-          return jobDate >= startDate && jobDate <= endDate;
-        })
+      const transformedJobs = (jobsData.jobs || [])
+        .filter(job => job.work_status === 'scheduled' || job.work_status === 'in_progress')
         .map(job => ({
           id: job.id,
-          property: job.customer?.business_name || job.customer?.name || 'Unknown',
+          property: job.customer_name || 'Unknown',
           duration_estimate: job.estimate_minutes || 120,
-          type: job.location?.name?.toLowerCase().includes('vacation') ? 'vr_turnover' : 'residential',
-          scheduled_start: job.scheduled_start_time,
-          priority: job.is_emergency ? 'high' : 'medium',
+          type: job.location_name?.toLowerCase().includes('vacation') ? 'vr_turnover' : 'residential',
+          scheduled_start: job.scheduled_start,
+          priority: 'medium',
+          notes: job.notes || [],
+          status: job.work_status
         }));
 
       addDebugLog('Jobs filtered by date range', {
-        total: jobsData.data?.length,
+        total: jobsData.jobs?.length || 0,
         filtered: transformedJobs.length,
         dateRange: `${startDate.toLocaleDateString()} to ${endDate.toLocaleDateString()}`
       });
 
-      const transformedCrew = (crewData || []).map(member => ({
+      const transformedCrew = (crewData.employees || []).map(member => ({
         id: member.id,
-        name: member.name,
-        status: member.status,
+        name: `${member.first_name} ${member.last_name}`,
+        email: member.email,
+        phone: member.mobile_number,
+        status: member.status || 'active',
       }));
 
       const transformedCustomers = (customersData.data || []).map(customer => ({
