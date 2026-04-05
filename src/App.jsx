@@ -122,22 +122,34 @@ const ACIDispatchApp = () => {
         end: endDate.toISOString()
       });
 
-      const jobsResponse = await fetch(
-        `https://api.housecallpro.com/v2/jobs?status=scheduled,in_progress&limit=200`,
-        {
-          method: 'GET',
-          headers: {
-            'Authorization': `Bearer ${settings.housecallProApiKey}`,
-            'Content-Type': 'application/json',
+      let jobsResponse;
+      try {
+        jobsResponse = await fetch(
+          `https://api.housecallpro.com/v2/jobs?status=scheduled,in_progress&limit=200`,
+          {
+            method: 'GET',
+            headers: {
+              'Authorization': `Bearer ${settings.housecallProApiKey}`,
+              'Content-Type': 'application/json',
+            }
           }
-        }
-      );
-
-      addDebugLog('Jobs response status', jobsResponse.status);
+        );
+        addDebugLog('Jobs response received', {
+          status: jobsResponse.status,
+          statusText: jobsResponse.statusText,
+          ok: jobsResponse.ok
+        });
+      } catch (fetchErr) {
+        addDebugLog('CRITICAL: Jobs fetch network error', {
+          message: fetchErr.message,
+          name: fetchErr.name
+        });
+        throw new Error(`HouseCall Pro network error: ${fetchErr.message}`);
+      }
 
       if (!jobsResponse.ok) {
         const errorText = await jobsResponse.text();
-        addDebugLog('Jobs response error', {
+        addDebugLog('Jobs response error (bad status)', {
           status: jobsResponse.status,
           statusText: jobsResponse.statusText,
           body: errorText
@@ -265,9 +277,14 @@ const ACIDispatchApp = () => {
       addDebugLog('HouseCall Pro sync successful');
       return true;
     } catch (err) {
-      setError(`HouseCall Pro sync failed: ${err.message}`);
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      setError(`HouseCall Pro sync failed: ${errorMsg}`);
       setSyncProgress('❌ HouseCall Pro sync failed');
-      addDebugLog('HouseCall Pro sync error', err);
+      addDebugLog('CRITICAL HouseCall Pro sync error', {
+        message: errorMsg,
+        type: err instanceof Error ? err.constructor.name : typeof err,
+        fullError: String(err)
+      });
       return false;
     }
   };
